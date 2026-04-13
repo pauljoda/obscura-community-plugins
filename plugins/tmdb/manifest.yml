@@ -7,7 +7,7 @@ homepage: "https://www.themoviedb.org"
 isNsfw: false
 tags: [movies, tv, series]
 runtime: typescript
-entry: "dist/index.js"
+entry: "dist/tmdb.js"
 
 auth:
   - key: TMDB_API_KEY
