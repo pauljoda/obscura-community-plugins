@@ -1,0 +1,23 @@
+id: tmdb
+name: The Movie Database
+version: "0.1.0"
+author: "Obscura Community"
+description: "Movie and TV series identification via TMDB API"
+homepage: "https://www.themoviedb.org"
+isNsfw: false
+tags: [movies, tv, series]
+runtime: typescript
+entry: "dist/index.js"
+
+auth:
+  - key: TMDB_API_KEY
+    label: "TMDB API Key (v3 auth)"
+    required: true
+    url: "https://www.themoviedb.org/settings/api"
+
+capabilities:
+  videoByURL: true
+  videoByName: true
+  folderByName: true
+  folderCascade: true
+  supportsBatch: false

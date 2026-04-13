@@ -1,0 +1,15 @@
+id: musicbrainz
+name: MusicBrainz
+version: "0.1.0"
+author: "Obscura Community"
+description: "Music metadata identification via MusicBrainz API"
+homepage: "https://musicbrainz.org"
+isNsfw: false
+tags: [music, audio, albums]
+runtime: python
+script: ["python3", "musicbrainz.py"]
+
+capabilities:
+  audioLibraryByName: true
+  audioByFragment: true
+  supportsBatch: false

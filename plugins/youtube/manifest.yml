@@ -1,0 +1,21 @@
+id: youtube
+name: YouTube Metadata
+version: "0.1.0"
+author: "Obscura Community"
+description: "Video and audio metadata from YouTube URLs"
+homepage: "https://developers.google.com/youtube/v3"
+isNsfw: false
+tags: [youtube, video, audio]
+runtime: typescript
+entry: "dist/index.js"
+
+auth:
+  - key: YOUTUBE_API_KEY
+    label: "YouTube Data API v3 Key"
+    required: true
+    url: "https://console.developers.google.com/apis/credentials"
+
+capabilities:
+  videoByURL: true
+  audioByURL: true
+  supportsBatch: true

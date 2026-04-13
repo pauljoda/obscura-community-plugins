@@ -1,0 +1,22 @@
+id: tvdb
+name: The TVDB
+version: "0.1.0"
+author: "Obscura Community"
+description: "TV series, seasons, and episode identification via TVDB v4 API"
+homepage: "https://thetvdb.com"
+isNsfw: false
+tags: [tv, series, episodes]
+runtime: typescript
+entry: "dist/index.js"
+
+auth:
+  - key: TVDB_API_KEY
+    label: "TVDB API Key"
+    required: true
+    url: "https://thetvdb.com/api-information"
+
+capabilities:
+  videoByURL: true
+  folderByName: true
+  folderCascade: true
+  supportsBatch: false

@@ -1,0 +1,65 @@
+# Obscura Community Plugins Index
+# This file is fetched by Obscura to discover available plugins.
+
+- id: tvdb
+  name: The TVDB
+  version: "0.1.0"
+  date: "2026-04-12"
+  path: plugins/tvdb/tvdb.zip
+  sha256: ""
+  runtime: typescript
+  isNsfw: false
+  description: "TV series, seasons, and episode identification via TVDB v4 API"
+  author: "Obscura Community"
+  capabilities:
+    folderByName: true
+    videoByURL: true
+    folderCascade: true
+    supportsBatch: false
+
+- id: tmdb
+  name: The Movie Database
+  version: "0.1.0"
+  date: "2026-04-12"
+  path: plugins/tmdb/tmdb.zip
+  sha256: ""
+  runtime: typescript
+  isNsfw: false
+  description: "Movie and TV series identification via TMDB API"
+  author: "Obscura Community"
+  capabilities:
+    folderByName: true
+    videoByURL: true
+    videoByName: true
+    folderCascade: true
+    supportsBatch: false
+
+- id: youtube
+  name: YouTube Metadata
+  version: "0.1.0"
+  date: "2026-04-12"
+  path: plugins/youtube/youtube.zip
+  sha256: ""
+  runtime: typescript
+  isNsfw: false
+  description: "Video and audio metadata from YouTube URLs"
+  author: "Obscura Community"
+  capabilities:
+    videoByURL: true
+    audioByURL: true
+    supportsBatch: true
+
+- id: musicbrainz
+  name: MusicBrainz
+  version: "0.1.0"
+  date: "2026-04-12"
+  path: plugins/musicbrainz/musicbrainz.zip
+  sha256: ""
+  runtime: python
+  isNsfw: false
+  description: "Music metadata identification via MusicBrainz API"
+  author: "Obscura Community"
+  capabilities:
+    audioLibraryByName: true
+    audioByFragment: true
+    supportsBatch: false
