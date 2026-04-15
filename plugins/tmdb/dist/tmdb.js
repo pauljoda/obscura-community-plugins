@@ -38,10 +38,56 @@ function tmdbUrl(mediaType, id) {
 function stillUrl(path, size = "w780") {
     return path ? `${TMDB_IMG}/${size}${path}` : null;
 }
+/**
+ * Legacy single-candidate helper kept for the flat legacy fields
+ * below. Prefer `imgCandidatesFrom()` / `mapImageEntries()` for real
+ * cascade results where TMDB exposes multiple images.
+ */
 function imgCand(url, rank = 5) {
     if (!url)
         return [];
     return [{ url, source: "tmdb", rank }];
+}
+/** Map a TMDB `posters[]` / `backdrops[]` / `stills[]` / `logos[]` array. */
+function mapImageEntries(entries, imageKind) {
+    if (!entries || entries.length === 0)
+        return [];
+    // Pick a reasonable render size per kind. `original` is
+    // appropriate for posters and backdrops since the cascade drawer
+    // shows them full-size; stills are much smaller so `w780` saves
+    // bandwidth without visibly degrading the preview.
+    const size = imageKind === "still"
+        ? "w780"
+        : imageKind === "logo"
+            ? "w500"
+            : "original";
+    return entries
+        .filter((e) => typeof e.file_path === "string" && e.file_path)
+        .map((e) => ({
+        url: `${TMDB_IMG}/${size}${e.file_path}`,
+        source: "tmdb",
+        // TMDB's vote_average is a rough popularity/quality signal in
+        // [0, 10]. The picker sorts descending by rank, so surfacing it
+        // directly gives us a sensible default ordering.
+        rank: typeof e.vote_average === "number" ? e.vote_average : 0,
+        language: e.iso_639_1 ?? null,
+        width: typeof e.width === "number" ? e.width : undefined,
+        height: typeof e.height === "number" ? e.height : undefined,
+        aspectRatio: typeof e.aspect_ratio === "number" ? e.aspect_ratio : undefined,
+    }));
+}
+/**
+ * Merge a fallback single-URL (e.g. the poster_path on the main
+ * detail response) into an image-candidate list if that URL isn't
+ * already present. Ensures we always have *something* in the slot
+ * even if the `/images` endpoint is missing or filtered empty.
+ */
+function mergeFallbackCandidate(candidates, fallbackUrl, rank) {
+    if (!fallbackUrl)
+        return candidates;
+    if (candidates.some((c) => c.url === fallbackUrl))
+        return candidates;
+    return [...candidates, { url: fallbackUrl, source: "tmdb", rank }];
 }
 function mapTmdbSeriesStatus(s) {
     if (!s)
@@ -158,9 +204,30 @@ async function videoByURL(input, apiKey) {
         return tvToVideoResult(detail);
     }
 }
-async function folderSeriesFromTvDetail(detail, input, apiKey) {
+async function folderSeriesFromTvDetail(detail, input, apiKey, candidates) {
     const genres = (detail.genres ?? []).map((g) => g.name);
     const network = detail.networks?.[0]?.name ?? detail.production_companies?.[0]?.name ?? null;
+    // Fetch the full series image set up front — TMDB exposes a
+    // `/tv/{id}/images` endpoint with arrays of posters, backdrops,
+    // and logos at multiple sizes and languages. Without this call we
+    // only get the single poster_path / backdrop_path on the detail
+    // response, which is the bug users saw as "only one image to
+    // select." Failure here is non-fatal: we fall through to the
+    // single-URL fields.
+    let seriesImages = {};
+    try {
+        seriesImages = await tmdbFetch(`/tv/${detail.id}/images`, apiKey, 
+        // `include_image_language=en,null` gives us English + untagged
+        // language-agnostic art. The picker can still filter language
+        // client-side if the user wants a specific locale.
+        { include_image_language: "en,null" });
+    }
+    catch {
+        // Treat as best-effort; fall back to the single-URL paths below.
+    }
+    const posterCandidates = mergeFallbackCandidate(mapImageEntries(seriesImages.posters, "poster"), posterUrl(detail.poster_path, "original"), 10);
+    const backdropCandidates = mergeFallbackCandidate(mapImageEntries(seriesImages.backdrops, "backdrop"), backdropUrl(detail.backdrop_path, "original"), 9);
+    const logoCandidates = mapImageEntries(seriesImages.logos, "logo");
     const seasonsOut = [];
     const local = parseLocalSeasons(input);
     if (local) {
@@ -195,6 +262,17 @@ async function folderSeriesFromTvDetail(detail, input, apiKey) {
             }
             const stub = detail.seasons?.find((s) => s.season_number === loc.seasonNumber);
             const tmdbEps = seasonDetail.episodes ?? [];
+            // Best-effort per-season image set. Same failure model as the
+            // series-level fetch: on error we fall through to the single
+            // `seasonDetail.poster_path` URL so the picker is never empty.
+            let seasonImages = {};
+            try {
+                seasonImages = await tmdbFetch(`/tv/${detail.id}/season/${loc.seasonNumber}/images`, apiKey, { include_image_language: "en,null" });
+            }
+            catch {
+                // leave empty
+            }
+            const seasonPosterCandidates = mergeFallbackCandidate(mapImageEntries(seasonImages.posters, "poster"), posterUrl(seasonDetail.poster_path, "original"), 6);
             const episodesOut = loc.episodes.map((le) => {
                 const t = tmdbEps.find((e) => e.episode_number === le.episodeNumber);
                 const matched = Boolean(t);
@@ -220,7 +298,7 @@ async function folderSeriesFromTvDetail(detail, input, apiKey) {
                     (loc.seasonNumber === 0 ? "Specials" : `Season ${loc.seasonNumber}`),
                 overview: seasonDetail.overview ?? null,
                 airDate: seasonDetail.air_date ?? stub?.air_date ?? null,
-                posterCandidates: imgCand(posterUrl(seasonDetail.poster_path), 6),
+                posterCandidates: seasonPosterCandidates,
                 externalIds: seasonDetail.id
                     ? { tmdb: String(seasonDetail.id) }
                     : { tmdb: `${detail.id}_s${loc.seasonNumber}` },
@@ -239,11 +317,15 @@ async function folderSeriesFromTvDetail(detail, input, apiKey) {
         genres,
         studioName: network,
         cast: topCast(detail),
-        posterCandidates: imgCand(posterUrl(detail.poster_path), 10),
-        backdropCandidates: imgCand(backdropUrl(detail.backdrop_path), 9),
-        logoCandidates: [],
+        posterCandidates,
+        backdropCandidates,
+        logoCandidates,
         externalIds: { tmdb: String(detail.id) },
         seasons: seasonsOut,
+        // Disambiguation candidates — populated only when the caller
+        // passed more than one search result through. The review drawer
+        // uses this to render a picker above the series header.
+        ...(candidates && candidates.length > 1 ? { candidates } : {}),
         // Legacy flat keys (identify row + rawResult consumers)
         name: detail.name,
         details: detail.overview ?? null,
@@ -258,26 +340,126 @@ async function folderSeriesFromTvDetail(detail, input, apiKey) {
         folderByName: true,
     };
 }
+/** Tokenize + normalize a query so we can score candidates manually. */
+function normalizeQueryForMatch(raw) {
+    return raw
+        .toLowerCase()
+        // Strip trailing bangs and stray punctuation that TMDB search handles
+        // as wildcards rather than exact matches.
+        .replace(/[!?.'"`]/g, "")
+        // Collapse "Blue's Clues and You!" → "blues clues and you".
+        .replace(/[^a-z0-9\s]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+/** Simple token-set similarity in [0, 1]. */
+function titleSimilarity(a, b) {
+    const ta = new Set(normalizeQueryForMatch(a).split(" ").filter(Boolean));
+    const tb = new Set(normalizeQueryForMatch(b).split(" ").filter(Boolean));
+    if (ta.size === 0 || tb.size === 0)
+        return 0;
+    let inter = 0;
+    for (const tok of ta) {
+        if (tb.has(tok))
+            inter += 1;
+    }
+    const union = new Set([...ta, ...tb]).size;
+    return inter / union;
+}
+/**
+ * Extract a TMDB id out of either an explicit `externalIds.tmdb`
+ * override or the `externalId: "tmdb:12345"` flat key the legacy
+ * folder-cascade action used. The cascade review drawer passes
+ * `externalIds.tmdb` when the user picks a disambiguation candidate.
+ */
+function extractTmdbIdOverride(input) {
+    const ext = input.externalIds;
+    if (ext && typeof ext === "object") {
+        const tmdb = ext.tmdb;
+        if (typeof tmdb === "string") {
+            const n = Number.parseInt(tmdb, 10);
+            if (Number.isFinite(n))
+                return n;
+        }
+        if (typeof tmdb === "number" && Number.isFinite(tmdb))
+            return tmdb;
+    }
+    const legacy = input.externalId;
+    if (typeof legacy === "string") {
+        const m = legacy.match(/^tmdb:(\d+)$/);
+        if (m)
+            return Number.parseInt(m[1], 10);
+    }
+    return null;
+}
+function searchResultToCandidate(r) {
+    return {
+        externalIds: { tmdb: String(r.id) },
+        title: r.name ?? r.title ?? "",
+        year: r.first_air_date
+            ? Number.parseInt(r.first_air_date.slice(0, 4), 10)
+            : null,
+        overview: r.overview ?? null,
+        posterUrl: posterUrl(r.poster_path, "w342"),
+        popularity: typeof r.vote_average === "number" ? r.vote_average : null,
+    };
+}
 async function folderByName(input, apiKey) {
+    // Direct-fetch bypass: the cascade review drawer re-runs this
+    // action with `{ externalIds: { tmdb } }` when the user picks a
+    // disambiguation candidate. When that's set we skip the search
+    // entirely and go straight to `/tv/{id}`.
+    const override = extractTmdbIdOverride(input);
+    if (override !== null) {
+        const detail = await tmdbFetch(`/tv/${override}`, apiKey, {
+            append_to_response: "credits",
+        });
+        return folderSeriesFromTvDetail(detail, input, apiKey);
+    }
     const query = input.name ?? input.title ?? "";
     if (!query)
         return null;
-    const data = await tmdbFetch("/search/tv", apiKey, { query, include_adult: "true" });
-    let tvId = null;
-    if (!data.results?.length) {
-        const multiData = await tmdbFetch("/search/multi", apiKey, { query, include_adult: "true" });
-        const tvResult = multiData.results?.find((r) => r.media_type === "tv");
-        if (!tvResult)
-            return null;
-        tvId = tvResult.id;
+    // Clean the query before hitting TMDB. A trailing "!" or stray
+    // punctuation turns TMDB's search into a fuzzy wildcard match —
+    // which is how "Blue's Clues and You!" ends up returning "Blue's
+    // Clues and You! Nursery Rhymes" as the top hit. Normalizing to
+    // plain words gives the search scorer something deterministic to
+    // work with.
+    const cleanQuery = normalizeQueryForMatch(query);
+    let searchResults = [];
+    if (cleanQuery) {
+        const data = await tmdbFetch("/search/tv", apiKey, { query: cleanQuery, include_adult: "true" });
+        searchResults = data.results ?? [];
     }
-    else {
-        tvId = data.results[0].id;
+    if (searchResults.length === 0) {
+        const multiData = await tmdbFetch("/search/multi", apiKey, { query: cleanQuery || query, include_adult: "true" });
+        searchResults = (multiData.results ?? []).filter((r) => r.media_type === "tv");
     }
-    const detail = await tmdbFetch(`/tv/${tvId}`, apiKey, {
+    if (searchResults.length === 0)
+        return null;
+    // Re-score the top results against the normalized query and sort
+    // by similarity descending; fall back to TMDB's own ordering as
+    // the tiebreaker. Take the highest-scoring match as the "best"
+    // result, and hand the top 10 back to the UI so the user can
+    // correct the match if our pick is wrong.
+    const scored = searchResults
+        .slice(0, 20)
+        .map((r, i) => ({
+        r,
+        score: titleSimilarity(query, r.name ?? r.title ?? ""),
+        order: i,
+    }))
+        .sort((a, b) => {
+        if (b.score !== a.score)
+            return b.score - a.score;
+        return a.order - b.order;
+    });
+    const best = scored[0].r;
+    const candidates = scored.slice(0, 10).map((s) => searchResultToCandidate(s.r));
+    const detail = await tmdbFetch(`/tv/${best.id}`, apiKey, {
         append_to_response: "credits",
     });
-    return folderSeriesFromTvDetail(detail, input, apiKey);
+    return folderSeriesFromTvDetail(detail, input, apiKey, candidates);
 }
 async function folderCascade(input, apiKey) {
     const externalId = input.externalId;

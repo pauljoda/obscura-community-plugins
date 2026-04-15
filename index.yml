@@ -19,8 +19,8 @@
 
 - id: tmdb
   name: The Movie Database
-  version: "0.2.0"
-  date: "2026-04-14"
+  version: "0.3.0"
+  date: "2026-04-15"
   path: plugins/tmdb/tmdb.zip
   sha256: ""
   runtime: typescript
