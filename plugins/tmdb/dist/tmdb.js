@@ -35,6 +35,82 @@ function backdropUrl(path, size = "w1280") {
 function tmdbUrl(mediaType, id) {
     return `https://www.themoviedb.org/${mediaType}/${id}`;
 }
+function stillUrl(path, size = "w780") {
+    return path ? `${TMDB_IMG}/${size}${path}` : null;
+}
+function imgCand(url, rank = 5) {
+    if (!url)
+        return [];
+    return [{ url, source: "tmdb", rank }];
+}
+function mapTmdbSeriesStatus(s) {
+    if (!s)
+        return null;
+    const l = s.toLowerCase();
+    if (l.includes("canceled") || l.includes("cancelled"))
+        return "canceled";
+    if (l.includes("ended"))
+        return "ended";
+    if (l.includes("return") ||
+        l.includes("production") ||
+        l.includes("pilot") ||
+        l.includes("planned")) {
+        return "returning";
+    }
+    return "unknown";
+}
+function topCast(detail) {
+    const rows = detail.credits?.cast ?? [];
+    return rows
+        .sort((a, b) => a.order - b.order)
+        .slice(0, 25)
+        .map((c) => ({
+        name: c.name,
+        character: c.character ?? null,
+        order: c.order,
+    }));
+}
+/** Parsed from Obscura identify — only seasons/episodes the user actually has on disk. */
+function parseLocalSeasons(input) {
+    const raw = input.localSeasons;
+    if (!Array.isArray(raw) || raw.length === 0)
+        return null;
+    const bySeason = new Map();
+    for (const item of raw) {
+        if (typeof item !== "object" || !item)
+            continue;
+        const o = item;
+        const sn = typeof o.seasonNumber === "number" ? o.seasonNumber : Number(o.seasonNumber);
+        if (!Number.isFinite(sn))
+            continue;
+        const acc = bySeason.get(sn) ?? [];
+        const epsRaw = o.episodes;
+        if (Array.isArray(epsRaw)) {
+            for (const e of epsRaw) {
+                if (typeof e !== "object" || !e)
+                    continue;
+                const er = e;
+                const en = typeof er.episodeNumber === "number" ? er.episodeNumber : Number(er.episodeNumber);
+                if (!Number.isFinite(en))
+                    continue;
+                acc.push({
+                    episodeNumber: en,
+                    localFilePath: typeof er.localFilePath === "string" ? er.localFilePath : "",
+                    title: typeof er.title === "string" ? er.title : null,
+                });
+            }
+        }
+        bySeason.set(sn, acc);
+    }
+    if (bySeason.size === 0)
+        return null;
+    return [...bySeason.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([seasonNumber, episodes]) => ({
+        seasonNumber,
+        episodes: episodes.sort((x, y) => x.episodeNumber - y.episodeNumber),
+    }));
+}
 // ─── URL parsing ──────────────────────────────────────────────────
 function parseTmdbUrl(url) {
     // https://www.themoviedb.org/movie/12345-slug
@@ -82,24 +158,126 @@ async function videoByURL(input, apiKey) {
         return tvToVideoResult(detail);
     }
 }
+async function folderSeriesFromTvDetail(detail, input, apiKey) {
+    const genres = (detail.genres ?? []).map((g) => g.name);
+    const network = detail.networks?.[0]?.name ?? detail.production_companies?.[0]?.name ?? null;
+    const seasonsOut = [];
+    const local = parseLocalSeasons(input);
+    if (local) {
+        for (const loc of local) {
+            let seasonDetail;
+            try {
+                seasonDetail = await tmdbFetch(`/tv/${detail.id}/season/${loc.seasonNumber}`, apiKey);
+            }
+            catch {
+                seasonsOut.push({
+                    seasonNumber: loc.seasonNumber,
+                    title: loc.seasonNumber === 0 ? "Specials" : `Season ${loc.seasonNumber}`,
+                    overview: null,
+                    airDate: null,
+                    posterCandidates: [],
+                    externalIds: { tmdb: `${detail.id}_s${loc.seasonNumber}` },
+                    episodes: loc.episodes.map((le) => ({
+                        seasonNumber: loc.seasonNumber,
+                        episodeNumber: le.episodeNumber,
+                        title: le.title,
+                        overview: null,
+                        airDate: null,
+                        runtime: null,
+                        stillCandidates: [],
+                        guestStars: [],
+                        externalIds: {},
+                        matched: false,
+                        localFilePath: le.localFilePath || null,
+                    })),
+                });
+                continue;
+            }
+            const stub = detail.seasons?.find((s) => s.season_number === loc.seasonNumber);
+            const tmdbEps = seasonDetail.episodes ?? [];
+            const episodesOut = loc.episodes.map((le) => {
+                const t = tmdbEps.find((e) => e.episode_number === le.episodeNumber);
+                const matched = Boolean(t);
+                const still = stillUrl(t?.still_path);
+                return {
+                    seasonNumber: loc.seasonNumber,
+                    episodeNumber: le.episodeNumber,
+                    title: (t?.name ?? le.title) || null,
+                    overview: t?.overview ?? null,
+                    airDate: t?.air_date ?? null,
+                    runtime: t?.runtime ?? null,
+                    stillCandidates: imgCand(still, 8),
+                    guestStars: [],
+                    externalIds: t?.id ? { tmdb: String(t.id) } : {},
+                    matched,
+                    localFilePath: le.localFilePath || null,
+                };
+            });
+            seasonsOut.push({
+                seasonNumber: loc.seasonNumber,
+                title: seasonDetail.name ??
+                    stub?.name ??
+                    (loc.seasonNumber === 0 ? "Specials" : `Season ${loc.seasonNumber}`),
+                overview: seasonDetail.overview ?? null,
+                airDate: seasonDetail.air_date ?? stub?.air_date ?? null,
+                posterCandidates: imgCand(posterUrl(seasonDetail.poster_path), 6),
+                externalIds: seasonDetail.id
+                    ? { tmdb: String(seasonDetail.id) }
+                    : { tmdb: `${detail.id}_s${loc.seasonNumber}` },
+                episodes: episodesOut,
+            });
+        }
+    }
+    return {
+        title: detail.name,
+        originalTitle: detail.original_name ?? null,
+        overview: detail.overview ?? null,
+        tagline: null,
+        firstAirDate: detail.first_air_date ?? null,
+        endAirDate: detail.last_air_date ?? null,
+        status: mapTmdbSeriesStatus(detail.status),
+        genres,
+        studioName: network,
+        cast: topCast(detail),
+        posterCandidates: imgCand(posterUrl(detail.poster_path), 10),
+        backdropCandidates: imgCand(backdropUrl(detail.backdrop_path), 9),
+        logoCandidates: [],
+        externalIds: { tmdb: String(detail.id) },
+        seasons: seasonsOut,
+        // Legacy flat keys (identify row + rawResult consumers)
+        name: detail.name,
+        details: detail.overview ?? null,
+        date: detail.first_air_date ?? null,
+        imageUrl: posterUrl(detail.poster_path),
+        backdropUrl: backdropUrl(detail.backdrop_path),
+        tagNames: genres,
+        urls: [tmdbUrl("tv", detail.id)],
+        seriesExternalId: `tmdb:${detail.id}`,
+        seasonCount: detail.number_of_seasons ?? undefined,
+        totalEpisodes: detail.number_of_episodes ?? undefined,
+        folderByName: true,
+    };
+}
 async function folderByName(input, apiKey) {
     const query = input.name ?? input.title ?? "";
     if (!query)
         return null;
-    // Search specifically for TV shows
     const data = await tmdbFetch("/search/tv", apiKey, { query, include_adult: "true" });
+    let tvId = null;
     if (!data.results?.length) {
-        // Fallback: try multi-search in case it's a movie franchise folder
         const multiData = await tmdbFetch("/search/multi", apiKey, { query, include_adult: "true" });
         const tvResult = multiData.results?.find((r) => r.media_type === "tv");
         if (!tvResult)
             return null;
-        const detail = await tmdbFetch(`/tv/${tvResult.id}`, apiKey);
-        return tvToFolderResult(detail);
+        tvId = tvResult.id;
     }
-    const best = data.results[0];
-    const detail = await tmdbFetch(`/tv/${best.id}`, apiKey);
-    return tvToFolderResult(detail);
+    else {
+        tvId = data.results[0].id;
+    }
+    const detail = await tmdbFetch(`/tv/${tvId}`, apiKey, {
+        append_to_response: "credits",
+    });
+    return folderSeriesFromTvDetail(detail, input, apiKey);
 }
 async function folderCascade(input, apiKey) {
     const externalId = input.externalId;
@@ -130,7 +308,7 @@ async function folderCascade(input, apiKey) {
     // Also get the series info for the folder result
     const tvDetail = await tmdbFetch(`/tv/${tvId}`, apiKey);
     return {
-        ...tvToFolderResult(tvDetail),
+        ...tvFlatLegacy(tvDetail),
         episodeMap,
     };
 }
@@ -179,7 +357,8 @@ function tvToVideoResult(detail) {
         director: null,
     };
 }
-function tvToFolderResult(detail) {
+/** Flat folder-shaped fields without the full `NormalizedSeriesResult` cascade. */
+function tvFlatLegacy(detail) {
     const network = detail.networks?.[0]?.name ?? detail.production_companies?.[0]?.name ?? null;
     const genres = (detail.genres ?? []).map((g) => g.name);
     return {
@@ -192,7 +371,7 @@ function tvToFolderResult(detail) {
         tagNames: genres,
         urls: [tmdbUrl("tv", detail.id)],
         seriesExternalId: `tmdb:${detail.id}`,
-        seasonNumber: detail.number_of_seasons ?? undefined,
+        seasonCount: detail.number_of_seasons ?? undefined,
         totalEpisodes: detail.number_of_episodes ?? undefined,
     };
 }
