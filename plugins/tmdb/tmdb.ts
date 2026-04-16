@@ -44,7 +44,7 @@ interface TmdbMovieDetail {
   tagline?: string;
   production_companies?: Array<{ name: string }>;
   credits?: {
-    cast?: Array<{ name: string; character?: string; order: number }>;
+    cast?: Array<{ name: string; character?: string; order: number; profile_path?: string }>;
     crew?: Array<{ name: string; job: string }>;
   };
 }
@@ -72,7 +72,7 @@ interface TmdbTvDetail {
     poster_path?: string;
   }>;
   credits?: {
-    cast?: Array<{ name: string; character?: string; order: number }>;
+    cast?: Array<{ name: string; character?: string; order: number; profile_path?: string }>;
   };
 }
 
@@ -91,6 +91,12 @@ interface TmdbSeasonDetail {
     air_date?: string;
     still_path?: string;
     runtime?: number;
+    guest_stars?: Array<{
+      name: string;
+      character?: string;
+      order?: number;
+      profile_path?: string;
+    }>;
   }>;
 }
 
@@ -231,10 +237,11 @@ function mapTmdbSeriesStatus(
   return "unknown";
 }
 
-function topCast(detail: TmdbTvDetail): Array<{
+function topCast(detail: TmdbTvDetail | TmdbMovieDetail): Array<{
   name: string;
   character?: string | null;
   order?: number | null;
+  profileUrl?: string | null;
 }> {
   const rows = detail.credits?.cast ?? [];
   return rows
@@ -244,6 +251,9 @@ function topCast(detail: TmdbTvDetail): Array<{
       name: c.name,
       character: c.character ?? null,
       order: c.order,
+      profileUrl: c.profile_path
+        ? posterUrl(c.profile_path, "w185")
+        : null,
     }));
 }
 
@@ -478,7 +488,14 @@ async function folderSeriesFromTvDetail(
           airDate: t?.air_date ?? null,
           runtime: t?.runtime ?? null,
           stillCandidates: imgCand(still, 8),
-          guestStars: [] as Array<Record<string, unknown>>,
+          guestStars: (t?.guest_stars ?? []).map((gs) => ({
+            name: gs.name,
+            character: gs.character ?? null,
+            order: gs.order ?? null,
+            profileUrl: gs.profile_path
+              ? posterUrl(gs.profile_path, "w185")
+              : null,
+          })),
           externalIds: t?.id ? { tmdb: String(t.id) } : {},
           matched,
           localFilePath: le.localFilePath || null,

@@ -114,6 +114,9 @@ function topCast(detail) {
         name: c.name,
         character: c.character ?? null,
         order: c.order,
+        profileUrl: c.profile_path
+            ? posterUrl(c.profile_path, "w185")
+            : null,
     }));
 }
 /** Parsed from Obscura identify — only seasons/episodes the user actually has on disk. */
@@ -285,7 +288,14 @@ async function folderSeriesFromTvDetail(detail, input, apiKey, candidates) {
                     airDate: t?.air_date ?? null,
                     runtime: t?.runtime ?? null,
                     stillCandidates: imgCand(still, 8),
-                    guestStars: [],
+                    guestStars: (t?.guest_stars ?? []).map((gs) => ({
+                        name: gs.name,
+                        character: gs.character ?? null,
+                        order: gs.order ?? null,
+                        profileUrl: gs.profile_path
+                            ? posterUrl(gs.profile_path, "w185")
+                            : null,
+                    })),
                     externalIds: t?.id ? { tmdb: String(t.id) } : {},
                     matched,
                     localFilePath: le.localFilePath || null,
