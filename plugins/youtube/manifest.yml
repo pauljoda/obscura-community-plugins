@@ -1,13 +1,13 @@
 id: youtube
 name: YouTube Metadata
-version: "0.1.0"
+version: "0.2.0"
 author: "Obscura Community"
-description: "Video and audio metadata from YouTube URLs"
+description: "Video and audio metadata from YouTube URLs and titles"
 homepage: "https://developers.google.com/youtube/v3"
 isNsfw: false
 tags: [youtube, video, audio]
 runtime: typescript
-entry: "dist/index.js"
+entry: "dist/youtube.js"
 
 auth:
   - key: YOUTUBE_API_KEY
@@ -17,5 +17,6 @@ auth:
 
 capabilities:
   videoByURL: true
+  videoByName: true
   audioByURL: true
   supportsBatch: true
