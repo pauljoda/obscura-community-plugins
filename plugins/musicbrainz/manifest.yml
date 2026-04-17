@@ -1,8 +1,8 @@
 id: musicbrainz
 name: MusicBrainz
-version: "0.1.0"
+version: "0.2.0"
 author: "Obscura Community"
-description: "Music metadata identification via MusicBrainz API"
+description: "Music metadata identification via MusicBrainz and Cover Art Archive"
 homepage: "https://musicbrainz.org"
 isNsfw: false
 tags: [music, audio, albums]
@@ -12,4 +12,5 @@ script: ["python3", "musicbrainz.py"]
 capabilities:
   audioLibraryByName: true
   audioByFragment: true
-  supportsBatch: false
+  audioByURL: true
+  supportsBatch: true
