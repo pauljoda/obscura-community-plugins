@@ -6,7 +6,7 @@
   version: 0.2.0
   date: '2026-04-17'
   path: plugins/tvdb/tvdb.zip
-  sha256: 042819cdea8d3c1ee86c78bcd43638f6310cc4ebca7e6f4bd1673677be28acc5
+  sha256: a54ff0bc257c923faeb90025194375feb3b2e00d33907c66dee81aba7ca8aa24
   runtime: typescript
   isNsfw: false
   description: TV series, seasons, and episode identification via TVDB v4 API
@@ -24,7 +24,7 @@
   version: 0.3.1
   date: '2026-04-16'
   path: plugins/tmdb/tmdb.zip
-  sha256: 2e0c9e9823a585ec4511137fea308f2ad6fab600bdbc8131e2c3890be46b80f5
+  sha256: 98a7edb20dba9a8a1697b5278e186ab348560af1f94a0a2e7604c83a71881c75
   runtime: typescript
   isNsfw: false
   description: Movie and TV series identification via TMDB API
@@ -37,17 +37,16 @@
     supportsBatch: false
 - id: youtube
   name: YouTube Metadata
-  version: 0.2.0
+  version: 0.3.0
   date: '2026-04-17'
   path: plugins/youtube/youtube.zip
-  sha256: 58d4c2953d8cf6220fda6136e7c3d7876ee20c14e37a257209edadeb4ad41bd7
+  sha256: 35408c5e5855f2d89b4d5ee912f472221e3917a2701eedde51844b6b92eb3d23
   runtime: typescript
   isNsfw: false
-  description: Video and audio metadata from YouTube URLs and titles
+  description: Video and audio metadata from YouTube URLs (oEmbed + optional Data API)
   author: Obscura Community
   capabilities:
     videoByURL: true
-    videoByName: true
     audioByURL: true
     supportsBatch: true
 - id: musicbrainz
@@ -55,7 +54,7 @@
   version: 0.2.0
   date: '2026-04-17'
   path: plugins/musicbrainz/musicbrainz.zip
-  sha256: 38cc7cb9f941cfb18e9c2b27e44e81ba0d651b102575e1f12eea317cba50505e
+  sha256: 66efad7013e7551477fb493daef5c94c7c63a280b521acf1e278282adac60891
   runtime: python
   isNsfw: false
   description: Music metadata identification via MusicBrainz and Cover Art Archive

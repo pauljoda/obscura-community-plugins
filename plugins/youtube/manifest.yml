@@ -1,22 +1,26 @@
 id: youtube
 name: YouTube Metadata
-version: "0.2.0"
+version: "0.3.0"
 author: "Obscura Community"
-description: "Video and audio metadata from YouTube URLs and titles"
+description: "Video and audio metadata from YouTube URLs (oEmbed + optional Data API)"
 homepage: "https://developers.google.com/youtube/v3"
 isNsfw: false
 tags: [youtube, video, audio]
 runtime: typescript
 entry: "dist/youtube.js"
 
+# YouTube oEmbed (https://www.youtube.com/oembed) requires no auth
+# and gives us title, author, and thumbnail for any public video.
+# The Data API key is OPTIONAL — when present we upgrade results
+# with description, duration, tags, channel id. Without it, oEmbed
+# alone still produces a usable identify result for URL lookups.
 auth:
   - key: YOUTUBE_API_KEY
-    label: "YouTube Data API v3 Key"
-    required: true
+    label: "YouTube Data API v3 Key (optional — upgrades metadata)"
+    required: false
     url: "https://console.developers.google.com/apis/credentials"
 
 capabilities:
   videoByURL: true
-  videoByName: true
   audioByURL: true
   supportsBatch: true
