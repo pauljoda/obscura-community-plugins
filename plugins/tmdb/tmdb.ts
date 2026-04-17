@@ -348,7 +348,9 @@ async function videoByName(
     );
     return movieToVideoResult(detail);
   } else {
-    const detail = await tmdbFetch<TmdbTvDetail>(`/tv/${best.id}`, apiKey);
+    const detail = await tmdbFetch<TmdbTvDetail>(`/tv/${best.id}`, apiKey, {
+      append_to_response: "credits",
+    });
     return tvToVideoResult(detail);
   }
 }
@@ -371,7 +373,9 @@ async function videoByURL(
     );
     return movieToVideoResult(detail);
   } else {
-    const detail = await tmdbFetch<TmdbTvDetail>(`/tv/${parsed.id}`, apiKey);
+    const detail = await tmdbFetch<TmdbTvDetail>(`/tv/${parsed.id}`, apiKey, {
+      append_to_response: "credits",
+    });
     return tvToVideoResult(detail);
   }
 }
@@ -742,20 +746,37 @@ async function folderCascade(
 
 function movieToVideoResult(detail: TmdbMovieDetail): Record<string, unknown> {
   const director = detail.credits?.crew?.find((c) => c.job === "Director")?.name ?? null;
-  const cast = (detail.credits?.cast ?? [])
-    .sort((a, b) => a.order - b.order)
-    .slice(0, 20)
-    .map((c) => c.name);
+  const cast = topCast(detail);
   const studio = detail.production_companies?.[0]?.name ?? null;
   const genres = (detail.genres ?? []).map((g) => g.name);
+  const poster = posterUrl(detail.poster_path, "original");
+  const backdrop = backdropUrl(detail.backdrop_path, "original");
 
+  // Emit the normalized NormalizedMovieResult shape the Obscura accept
+  // pipeline reads (see packages/plugins/src/normalized-video.ts →
+  // normalizeMovieResult). The legacy flat keys below (imageUrl,
+  // performerNames, tagNames, urls, date, details) are kept so older
+  // identify-row consumers keep working, but `cast` / `posterCandidates`
+  // / `externalIds` / `releaseDate` / `genres` are what the cascade
+  // review drawer and accept-scrape service actually use.
   return {
     title: detail.title,
+    originalTitle: detail.original_title ?? null,
+    overview: detail.overview ?? null,
+    tagline: detail.tagline ?? null,
+    releaseDate: detail.release_date ?? null,
+    runtime: detail.runtime ?? null,
+    genres,
+    studioName: studio,
+    cast,
+    posterCandidates: poster ? [{ url: poster, source: "tmdb", rank: 10 }] : [],
+    backdropCandidates: backdrop ? [{ url: backdrop, source: "tmdb", rank: 9 }] : [],
+    externalIds: { tmdb: String(detail.id) },
+    // Legacy flat keys (identify row + rawResult consumers)
     date: detail.release_date ?? null,
     details: detail.overview ?? null,
     urls: [tmdbUrl("movie", detail.id)],
-    studioName: studio,
-    performerNames: cast,
+    performerNames: cast.map((c) => c.name),
     tagNames: genres,
     imageUrl: posterUrl(detail.poster_path),
     episodeNumber: null,
@@ -768,6 +789,7 @@ function movieToVideoResult(detail: TmdbMovieDetail): Record<string, unknown> {
 function tvToVideoResult(detail: TmdbTvDetail): Record<string, unknown> {
   const network = detail.networks?.[0]?.name ?? detail.production_companies?.[0]?.name ?? null;
   const genres = (detail.genres ?? []).map((g) => g.name);
+  const cast = topCast(detail);
 
   return {
     title: detail.name,
@@ -775,7 +797,8 @@ function tvToVideoResult(detail: TmdbTvDetail): Record<string, unknown> {
     details: detail.overview ?? null,
     urls: [tmdbUrl("tv", detail.id)],
     studioName: network,
-    performerNames: [],
+    cast,
+    performerNames: cast.map((c) => c.name),
     tagNames: genres,
     imageUrl: posterUrl(detail.poster_path),
     episodeNumber: null,

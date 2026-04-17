@@ -3,62 +3,59 @@
 
 - id: tvdb
   name: The TVDB
-  version: "0.1.0"
-  date: "2026-04-12"
+  version: 0.1.0
+  date: '2026-04-12'
   path: plugins/tvdb/tvdb.zip
-  sha256: ""
+  sha256: e65d49f92ac51af079b69a1cf92069a0561d0daeb6434ec1569d8ade2d3d886d
   runtime: typescript
   isNsfw: false
-  description: "TV series, seasons, and episode identification via TVDB v4 API"
-  author: "Obscura Community"
+  description: TV series, seasons, and episode identification via TVDB v4 API
+  author: Obscura Community
   capabilities:
     folderByName: true
     videoByURL: true
     folderCascade: true
     supportsBatch: false
-
 - id: tmdb
   name: The Movie Database
-  version: "0.3.0"
-  date: "2026-04-15"
+  version: 0.3.1
+  date: '2026-04-16'
   path: plugins/tmdb/tmdb.zip
-  sha256: ""
+  sha256: 3058efe77c3f95f93e18ba0f64f40bfa768e05cb36455adc9ee783b5d1c29270
   runtime: typescript
   isNsfw: false
-  description: "Movie and TV series identification via TMDB API"
-  author: "Obscura Community"
+  description: Movie and TV series identification via TMDB API
+  author: Obscura Community
   capabilities:
     folderByName: true
     videoByURL: true
     videoByName: true
     folderCascade: true
     supportsBatch: false
-
 - id: youtube
   name: YouTube Metadata
-  version: "0.1.0"
-  date: "2026-04-12"
+  version: 0.1.0
+  date: '2026-04-12'
   path: plugins/youtube/youtube.zip
-  sha256: ""
+  sha256: cc0f395b9bbe2619af826ac3612fced933440d22ba04a41a454529cbe64b9b9a
   runtime: typescript
   isNsfw: false
-  description: "Video and audio metadata from YouTube URLs"
-  author: "Obscura Community"
+  description: Video and audio metadata from YouTube URLs
+  author: Obscura Community
   capabilities:
     videoByURL: true
     audioByURL: true
     supportsBatch: true
-
 - id: musicbrainz
   name: MusicBrainz
-  version: "0.1.0"
-  date: "2026-04-12"
+  version: 0.1.0
+  date: '2026-04-12'
   path: plugins/musicbrainz/musicbrainz.zip
-  sha256: ""
+  sha256: a8363c5c0e9eb75809781c2c5cc2e87889b871e7d50f7c503aed33dc24947ba4
   runtime: python
   isNsfw: false
-  description: "Music metadata identification via MusicBrainz API"
-  author: "Obscura Community"
+  description: Music metadata identification via MusicBrainz API
+  author: Obscura Community
   capabilities:
     audioLibraryByName: true
     audioByFragment: true
