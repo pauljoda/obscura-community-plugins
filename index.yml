@@ -3,10 +3,10 @@
 
 - id: tvdb
   name: The TVDB
-  version: 0.1.0
-  date: '2026-04-12'
+  version: 0.2.0
+  date: '2026-04-17'
   path: plugins/tvdb/tvdb.zip
-  sha256: 3c1d559aabcf180c9ec39fd1993df8af872df592fe089bb12e8a37f57d560a57
+  sha256: 042819cdea8d3c1ee86c78bcd43638f6310cc4ebca7e6f4bd1673677be28acc5
   runtime: typescript
   isNsfw: false
   description: TV series, seasons, and episode identification via TVDB v4 API
@@ -15,13 +15,16 @@
     folderByName: true
     videoByURL: true
     folderCascade: true
+    seriesByURL: true
+    seriesByName: true
+    seriesCascade: true
     supportsBatch: false
 - id: tmdb
   name: The Movie Database
   version: 0.3.1
   date: '2026-04-16'
   path: plugins/tmdb/tmdb.zip
-  sha256: 79b688941e31654eee994bf7b950d21d9c393d3c7eacce4361c925e3feffbd2a
+  sha256: 2e0c9e9823a585ec4511137fea308f2ad6fab600bdbc8131e2c3890be46b80f5
   runtime: typescript
   isNsfw: false
   description: Movie and TV series identification via TMDB API
@@ -34,29 +37,31 @@
     supportsBatch: false
 - id: youtube
   name: YouTube Metadata
-  version: 0.1.0
-  date: '2026-04-12'
+  version: 0.2.0
+  date: '2026-04-17'
   path: plugins/youtube/youtube.zip
-  sha256: e9c2ddd702823e1e41a0efb7a10289ed4150e9b8b0901e075d7ae90961fc9b16
+  sha256: 58d4c2953d8cf6220fda6136e7c3d7876ee20c14e37a257209edadeb4ad41bd7
   runtime: typescript
   isNsfw: false
-  description: Video and audio metadata from YouTube URLs
+  description: Video and audio metadata from YouTube URLs and titles
   author: Obscura Community
   capabilities:
     videoByURL: true
+    videoByName: true
     audioByURL: true
     supportsBatch: true
 - id: musicbrainz
   name: MusicBrainz
-  version: 0.1.0
-  date: '2026-04-12'
+  version: 0.2.0
+  date: '2026-04-17'
   path: plugins/musicbrainz/musicbrainz.zip
-  sha256: d0b30baffed53716cbf89e7f21de89cadc4d472ea825b02550131c096309e51c
+  sha256: 38cc7cb9f941cfb18e9c2b27e44e81ba0d651b102575e1f12eea317cba50505e
   runtime: python
   isNsfw: false
-  description: Music metadata identification via MusicBrainz API
+  description: Music metadata identification via MusicBrainz and Cover Art Archive
   author: Obscura Community
   capabilities:
     audioLibraryByName: true
     audioByFragment: true
-    supportsBatch: false
+    audioByURL: true
+    supportsBatch: true
