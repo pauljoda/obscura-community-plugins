@@ -3,7 +3,6 @@
   "private": true,
   "version": "0.0.0",
   "description": "Community-maintained plugins for Obscura media browser.",
-  "type": "module",
   "scripts": {
     "build": "node scripts/build-plugins.mjs"
   },
