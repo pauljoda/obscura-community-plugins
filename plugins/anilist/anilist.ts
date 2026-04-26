@@ -18,7 +18,7 @@
 
 const ANILIST_API = "https://graphql.anilist.co";
 const ANILIST_WEB = "https://anilist.co";
-const USER_AGENT = "Obscura-AniList-Plugin/0.2.0";
+const USER_AGENT = "Obscura-AniList-Plugin/0.2.1";
 
 // Stop walking the SEQUEL/PREQUEL chain after this many entries to
 // bound API calls and protect against pathological cycles.
@@ -553,11 +553,24 @@ function buildEpisodeRecords(
   m: AniListMedia,
   local?: LocalEpisodeDef[] | null,
 ): EpisodeRecord[] {
+  // Trust streamingEpisodes only when their count matches the declared
+  // episode count. Crunchyroll lists multi-season anime as one
+  // continuous show, and AniList faithfully copies that list onto
+  // every Media in the chain — so JJK S2 (episodes: 23) reports the
+  // same 24 streaming entries as JJK S1, all with S1 titles. The
+  // count mismatch is a reliable signal that the data is the parent
+  // series' episodes, not this entry's.
+  const seList = m.streamingEpisodes ?? [];
+  const expected = m.episodes ?? 0;
+  const trustStreaming = seList.length > 0 && expected > 0 && seList.length === expected;
+
   // Index AniList's streaming episodes by number for O(1) lookup.
   const byNum = new Map<number, AniListStreamingEpisode>();
-  for (const se of m.streamingEpisodes ?? []) {
-    const n = parseStreamingEpisodeNumber(se.title);
-    if (n !== null && !byNum.has(n)) byNum.set(n, se);
+  if (trustStreaming) {
+    for (const se of seList) {
+      const n = parseStreamingEpisodeNumber(se.title);
+      if (n !== null && !byNum.has(n)) byNum.set(n, se);
+    }
   }
 
   // Caller-provided local episode layout takes precedence over the
@@ -721,6 +734,40 @@ function mediaToVideoResult(m: AniListMedia): Record<string, unknown> {
   };
 }
 
+/**
+ * Season record for a `localSeasons` entry whose `seasonNumber` falls
+ * outside the AniList chain. We have no AniList Media to enrich
+ * from, so episodes carry only the user-provided fields and the host
+ * UI can still render the local files.
+ */
+function buildLocalOnlySeasonRecord(
+  ls: LocalSeasonDef,
+): Record<string, unknown> {
+  return {
+    seasonNumber: ls.seasonNumber,
+    title: `Season ${ls.seasonNumber}`,
+    overview: null,
+    airDate: null,
+    posterCandidates: [],
+    externalIds: {},
+    episodes: ls.episodes.map((le) => ({
+      seasonNumber: ls.seasonNumber,
+      episodeNumber: le.episodeNumber,
+      title: le.title,
+      overview: null,
+      airDate: null,
+      runtime: null,
+      stillCandidates: [],
+      guestStars: [],
+      externalIds: {},
+      matched: false,
+      localFilePath: le.localFilePath || null,
+      streamingUrl: null,
+      streamingSite: null,
+    })),
+  };
+}
+
 function buildSeasonRecord(
   m: AniListMedia,
   seasonNumber: number,
@@ -761,12 +808,28 @@ function chainToFolderResult(
   const local = parseLocalSeasons(input);
 
   const seasons: Array<Record<string, unknown>> = [];
+  const claimedSeasonNumbers = new Set<number>();
   chain.forEach((m, i) => {
     const seasonNumber = i + 1;
+    claimedSeasonNumbers.add(seasonNumber);
     const localForSeason =
       local?.find((s) => s.seasonNumber === seasonNumber)?.episodes ?? null;
     seasons.push(buildSeasonRecord(m, seasonNumber, localForSeason));
   });
+
+  // The chain only covers what AniList knows about. If the user has
+  // local seasons numbered outside the chain (mis-numbered folders,
+  // an OVA collection labeled "Season 4", etc.), surface them too so
+  // the cascade UI doesn't silently drop the user's files.
+  if (local) {
+    for (const ls of local) {
+      if (claimedSeasonNumbers.has(ls.seasonNumber)) continue;
+      seasons.push(buildLocalOnlySeasonRecord(ls));
+    }
+    seasons.sort(
+      (a, b) => (a.seasonNumber as number) - (b.seasonNumber as number),
+    );
+  }
 
   // Headline air dates span the chain.
   const firstAirDate = fuzzyDateToString(head.startDate);
@@ -903,14 +966,16 @@ async function videoByURL(
 async function folderByName(
   input: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
-  // Cascade drawer re-resolves with explicit ID after disambiguation —
-  // skip the search and go straight to /Media.
+  // The cascade drawer re-resolves with `externalIds.anilist` when
+  // the user picks a candidate. Respect that pick literally — return
+  // a single-Media folder result rather than walking the chain, or
+  // the user's selection silently re-anchors back to chain head and
+  // the UI shows no change.
   const override = extractAniListIdOverride(input);
   if (override !== null) {
     const m = await fetchMediaById(override);
     if (!m) return null;
-    const chain = await walkSeasonChain(m);
-    return chainToFolderResult(chain, input);
+    return chainToFolderResult([m], input);
   }
 
   const query = (input.name as string) ?? (input.title as string) ?? "";
