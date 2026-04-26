@@ -1,6 +1,6 @@
 id: anilist
 name: AniList
-version: "0.3.1"
+version: "0.3.2"
 author: "Obscura Community"
 description: "Anime identification (TV, movies, OVAs) via the AniList GraphQL API"
 homepage: "https://anilist.co"
