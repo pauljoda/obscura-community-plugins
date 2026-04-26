@@ -18,7 +18,7 @@
 
 const ANILIST_API = "https://graphql.anilist.co";
 const ANILIST_WEB = "https://anilist.co";
-const USER_AGENT = "Obscura-AniList-Plugin/0.3.0";
+const USER_AGENT = "Obscura-AniList-Plugin/0.3.1";
 
 // Stop walking the SEQUEL/PREQUEL chain after this many entries to
 // bound API calls and protect against pathological cycles.
@@ -915,9 +915,18 @@ function chainToFolderResult(
   const studio = pickStudio(head.studios);
   const local = parseLocalSeasons(input);
 
+  // When the host tells us how many seasons live on disk, only emit
+  // that many default seasons — Dr. STONE's chain has 7 cours but a
+  // user with 4 disk folders shouldn't see 7 cards in the review
+  // drawer. The full picker stays in seasonOptions so they can re-map
+  // any disk folder to any AniList Media. With no localSeasons hint
+  // we surface the whole chain (legacy behavior).
+  const targetSeasonCount = local && local.length > 0 ? local.length : chain.length;
+  const trimmedChain = chain.slice(0, targetSeasonCount);
+
   const seasons: Array<Record<string, unknown>> = [];
   const claimedSeasonNumbers = new Set<number>();
-  chain.forEach((m, i) => {
+  trimmedChain.forEach((m, i) => {
     const seasonNumber = i + 1;
     claimedSeasonNumbers.add(seasonNumber);
     const localForSeason =
@@ -939,15 +948,20 @@ function chainToFolderResult(
     );
   }
 
-  // Headline air dates span the chain.
+  // Headline metadata spans the trimmed chain — totalEpisodes
+  // reflects what the user actually sees in `seasons[]`, not the
+  // full upstream chain.
+  const lastEntry = trimmedChain[trimmedChain.length - 1];
   const firstAirDate = fuzzyDateToString(head.startDate);
-  const endAirDate = fuzzyDateToString(chain[chain.length - 1].endDate);
-  const totalEpisodes = chain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
-  const lastStatus = mapStatus(chain[chain.length - 1].status);
+  const endAirDate = fuzzyDateToString(lastEntry.endDate);
+  const totalEpisodes = trimmedChain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
+  const lastStatus = mapStatus(lastEntry.status);
 
-  // Build the per-season picker list: chain entries first (in season
-  // order), then related Media sorted by year so the user can pick
-  // logical "this is my season X" mappings.
+  // Build the per-season picker list. We label every chain entry
+  // (full chain, not trimmed) with its "Season N" hint so the host
+  // UI's per-season picker can offer the entries beyond what we
+  // showed by default — e.g. a user with 4 disk seasons might still
+  // want to remap their "S4" folder to a later cour.
   const chainOptions = chain.map((m, i) =>
     mediaToSeasonOption(m, `Season ${i + 1}`),
   );
@@ -988,7 +1002,7 @@ function chainToFolderResult(
     tagNames: genres,
     urls: [mediaSiteUrl(head)],
     seriesExternalId: `anilist:${head.id}`,
-    seasonCount: chain.length,
+    seasonCount: seasons.length,
     totalEpisodes: totalEpisodes || undefined,
     folderByName: true,
   };
@@ -1155,12 +1169,21 @@ async function folderCascade(
   const media = await fetchMediaById(id);
   if (!media) return null;
 
-  // The host is expected to pass the per-season `externalIds.anilist`
-  // from `seasons[]` (or a user override from `seasonOptions`); we
-  // trust it literally rather than re-deriving via chain walking,
-  // which would silently override user picks.
   const seasonNumber =
     typeof input.seasonNumber === "number" ? input.seasonNumber : 1;
+
+  // Hosts following the TMDB pattern call cascade with the series
+  // root externalId plus seasonNumber. Walk the chain so "season N
+  // of Dr. STONE" resolves to chain[N-1] (e.g. STONE WARS, not Dr.
+  // STONE's own episodes labeled as S2). If chain walking finds
+  // fewer entries than seasonNumber asks for, fall back to the
+  // picked Media — that handles per-season externalIds and user
+  // picks from seasonOptions, where the externalId IS the answer.
+  if (seasonNumber > 1 && TV_CHAIN_FORMATS.has(media.format ?? "")) {
+    const chain = await walkSeasonChain(media);
+    const target = chain[seasonNumber - 1];
+    if (target) return mediaToCascadeResult(target, seasonNumber);
+  }
   return mediaToCascadeResult(media, seasonNumber);
 }
 
