@@ -7,15 +7,27 @@
  * Capabilities:
  * - videoByName:    search anime by title, return single best match
  * - videoByURL:     resolve https://anilist.co/anime/{id} URLs
- * - folderByName:   search for a series by folder name with disambiguation candidates
- * - folderCascade:  re-resolve a chosen series + return per-episode metadata
+ * - folderByName:   search for a series by folder name; auto-merges
+ *                   AniList's separate-Media-per-cour entries (S1/S2/S3)
+ *                   into a single series via PREQUEL/SEQUEL chain walking
+ * - folderCascade:  return per-episode metadata for a given season of a chain
  *
- * Rate limit: 30 req/min per IP. Each call is a single POST.
+ * Rate limit: 30 req/min per IP. Each handler does at most ~1 fetch per
+ * season in the chain (capped at MAX_CHAIN_DEPTH).
  */
 
 const ANILIST_API = "https://graphql.anilist.co";
 const ANILIST_WEB = "https://anilist.co";
-const USER_AGENT = "Obscura-AniList-Plugin/0.1.0";
+const USER_AGENT = "Obscura-AniList-Plugin/0.2.0";
+
+// Stop walking the SEQUEL/PREQUEL chain after this many entries to
+// bound API calls and protect against pathological cycles.
+const MAX_CHAIN_DEPTH = 10;
+
+// Only relations whose linked Media has these formats count as "next
+// season" hops. Movies/ONAs/specials remain as separate disambiguation
+// candidates rather than getting folded in as a season.
+const TV_CHAIN_FORMATS = new Set(["TV", "TV_SHORT"]);
 
 // ─── AniList GraphQL response types ───────────────────────────────
 
@@ -69,6 +81,15 @@ interface AniListCharacterEdge {
   voiceActors?: AniListVoiceActor[];
 }
 
+interface AniListRelationEdge {
+  relationType?: string | null;
+  node?: {
+    id: number;
+    type?: string | null;
+    format?: string | null;
+  } | null;
+}
+
 interface AniListMedia {
   id: number;
   idMal?: number | null;
@@ -94,6 +115,7 @@ interface AniListMedia {
   isAdult?: boolean | null;
   streamingEpisodes?: AniListStreamingEpisode[] | null;
   characters?: { edges?: AniListCharacterEdge[] } | null;
+  relations?: { edges?: AniListRelationEdge[] } | null;
 }
 
 interface GraphQLResponse<T> {
@@ -179,6 +201,12 @@ const MEDIA_FIELDS = `
       voiceActors(language: JAPANESE) { name { full } image { large } }
     }
   }
+  relations {
+    edges {
+      relationType(version: 2)
+      node { id type format }
+    }
+  }
 `;
 
 const MEDIA_DETAIL_QUERY = `
@@ -262,6 +290,34 @@ function originalTitle(t?: AniListTitle | null): string | null {
   // the "original"; otherwise fall back to native.
   if (t.english && t.romaji && t.english !== t.romaji) return t.romaji ?? null;
   return t.native ?? t.romaji ?? null;
+}
+
+/**
+ * AniList descriptions still contain HTML even with `asHtml: false` —
+ * `<br>`, `<i>`, `<b>`, occasional `<p>`, plus the usual entity escapes.
+ * Convert to plain text the UI can render directly: `<br>` becomes a
+ * newline, paragraph structure is preserved, other tags are dropped.
+ */
+function stripHtml(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const out = s
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n\n")
+    .replace(/<p\b[^>]*>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return out || null;
 }
 
 function fuzzyDateToString(d?: AniListFuzzyDate | null): string | null {
@@ -365,7 +421,7 @@ function mediaToCandidate(m: AniListMedia): Record<string, unknown> {
     externalIds: { anilist: String(m.id) },
     title: pickTitle(m.title),
     year: m.seasonYear ?? m.startDate?.year ?? null,
-    overview: m.description ?? null,
+    overview: stripHtml(m.description),
     posterUrl: pickPosterUrl(m.coverImage),
     popularity: typeof m.averageScore === "number" ? m.averageScore : null,
     format: m.format ?? null,
@@ -560,6 +616,70 @@ function buildEpisodeRecords(
   return out;
 }
 
+// ─── Season chain walking ─────────────────────────────────────────
+
+function pickRelatedMediaId(
+  m: AniListMedia,
+  relationType: "PREQUEL" | "SEQUEL",
+): number | null {
+  const edges = m.relations?.edges ?? [];
+  for (const e of edges) {
+    if (e.relationType !== relationType) continue;
+    const node = e.node;
+    if (!node || node.type !== "ANIME") continue;
+    if (!TV_CHAIN_FORMATS.has(node.format ?? "")) continue;
+    return node.id;
+  }
+  return null;
+}
+
+/**
+ * AniList stores each anime cour/season as its own Media entry (e.g.
+ * Attack on Titan S1, S2, Final all have distinct IDs). Walk the
+ * PREQUEL chain backward to find the earliest TV entry, then walk
+ * SEQUEL forward to assemble the full season list. Returns the chain
+ * in season order — index 0 is "Season 1".
+ *
+ * Movies, OVAs, ONAs, and specials are NOT folded into the chain:
+ * users see those as separate disambiguation candidates.
+ */
+async function walkSeasonChain(
+  rootMedia: AniListMedia,
+  fetchById: (id: number) => Promise<AniListMedia | null> = fetchMediaById,
+): Promise<AniListMedia[]> {
+  const cache = new Map<number, AniListMedia>([[rootMedia.id, rootMedia]]);
+
+  // Walk PREQUEL backward to find earliest TV entry.
+  let earliest = rootMedia;
+  for (let i = 0; i < MAX_CHAIN_DEPTH; i++) {
+    const prequelId = pickRelatedMediaId(earliest, "PREQUEL");
+    if (prequelId === null || cache.has(prequelId)) break;
+    const prev = await fetchById(prequelId);
+    if (!prev) break;
+    cache.set(prev.id, prev);
+    earliest = prev;
+  }
+
+  // Walk SEQUEL forward from the earliest entry to assemble the chain.
+  const chain: AniListMedia[] = [earliest];
+  const seen = new Set<number>([earliest.id]);
+  while (chain.length < MAX_CHAIN_DEPTH) {
+    const last = chain[chain.length - 1];
+    const sequelId = pickRelatedMediaId(last, "SEQUEL");
+    if (sequelId === null || seen.has(sequelId)) break;
+    let next = cache.get(sequelId) ?? null;
+    if (!next) {
+      next = await fetchById(sequelId);
+      if (!next) break;
+      cache.set(next.id, next);
+    }
+    chain.push(next);
+    seen.add(next.id);
+  }
+
+  return chain;
+}
+
 // ─── Result builders ──────────────────────────────────────────────
 
 function mediaToVideoResult(m: AniListMedia): Record<string, unknown> {
@@ -574,7 +694,7 @@ function mediaToVideoResult(m: AniListMedia): Record<string, unknown> {
   return {
     title,
     originalTitle: originalTitle(m.title),
-    overview: m.description ?? null,
+    overview: stripHtml(m.description),
     tagline: null,
     releaseDate,
     runtime: m.duration ?? null,
@@ -586,7 +706,7 @@ function mediaToVideoResult(m: AniListMedia): Record<string, unknown> {
     externalIds: { anilist: String(m.id), ...(m.idMal ? { mal: String(m.idMal) } : {}) },
     // Legacy flat keys for identify-row consumers
     date: releaseDate,
-    details: m.description ?? null,
+    details: stripHtml(m.description),
     urls: [url],
     performerNames: cast.map((c) => c.name),
     tagNames: genres,
@@ -601,97 +721,127 @@ function mediaToVideoResult(m: AniListMedia): Record<string, unknown> {
   };
 }
 
-function mediaToFolderResult(
+function buildSeasonRecord(
   m: AniListMedia,
+  seasonNumber: number,
+  localEpisodes: LocalEpisodeDef[] | null,
+): Record<string, unknown> {
+  const episodes = buildEpisodeRecords(m, localEpisodes).map((e) => ({
+    ...e,
+    seasonNumber,
+  }));
+  return {
+    seasonNumber,
+    title: pickTitle(m.title) || `Season ${seasonNumber}`,
+    overview: stripHtml(m.description),
+    airDate: fuzzyDateToString(m.startDate),
+    posterCandidates: coverCandidates(m.coverImage),
+    externalIds: { anilist: String(m.id) },
+    episodes,
+  };
+}
+
+/**
+ * Build the multi-season folder result. The chain head (chain[0]) is
+ * the canonical "series" — its title, cast, and artwork are surfaced
+ * at the top level. Each chain entry becomes one season. When the
+ * caller passes `localSeasons`, episodes for season N are matched
+ * against `chain[N-1].streamingEpisodes`.
+ */
+function chainToFolderResult(
+  chain: AniListMedia[],
   input: Record<string, unknown>,
   candidates?: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
-  const title = pickTitle(m.title);
-  const genres = m.genres ?? [];
-  const cast = castFromCharacters(m.characters?.edges);
-  const studio = pickStudio(m.studios);
+  const head = chain[0];
+  const title = pickTitle(head.title);
+  const genres = head.genres ?? [];
+  const cast = castFromCharacters(head.characters?.edges);
+  const studio = pickStudio(head.studios);
   const local = parseLocalSeasons(input);
 
-  // AniList models each "season" of an anime as its own Media entry
-  // (Attack on Titan S1 / S2 / Final etc. have separate IDs), so the
-  // series we resolved IS one season. Surface a single seasonNumber: 1
-  // populated either from the user's local layout or from streamingEpisodes.
-  const localSeason1 = local?.find((s) => s.seasonNumber === 1) ?? local?.[0];
-  const episodes = buildEpisodeRecords(m, localSeason1?.episodes);
+  const seasons: Array<Record<string, unknown>> = [];
+  chain.forEach((m, i) => {
+    const seasonNumber = i + 1;
+    const localForSeason =
+      local?.find((s) => s.seasonNumber === seasonNumber)?.episodes ?? null;
+    seasons.push(buildSeasonRecord(m, seasonNumber, localForSeason));
+  });
 
-  const seasons =
-    episodes.length > 0
-      ? [
-          {
-            seasonNumber: 1,
-            title: title || "Season 1",
-            overview: m.description ?? null,
-            airDate: fuzzyDateToString(m.startDate),
-            posterCandidates: coverCandidates(m.coverImage),
-            externalIds: { anilist: String(m.id) },
-            episodes,
-          },
-        ]
-      : [];
+  // Headline air dates span the chain.
+  const firstAirDate = fuzzyDateToString(head.startDate);
+  const endAirDate = fuzzyDateToString(chain[chain.length - 1].endDate);
+  const totalEpisodes = chain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
+  const lastStatus = mapStatus(chain[chain.length - 1].status);
 
   return {
     title,
-    originalTitle: originalTitle(m.title),
-    overview: m.description ?? null,
+    originalTitle: originalTitle(head.title),
+    overview: stripHtml(head.description),
     tagline: null,
-    firstAirDate: fuzzyDateToString(m.startDate),
-    endAirDate: fuzzyDateToString(m.endDate),
-    status: mapStatus(m.status),
+    firstAirDate,
+    endAirDate,
+    status: lastStatus,
     genres,
     studioName: studio,
     cast,
-    posterCandidates: coverCandidates(m.coverImage),
-    backdropCandidates: bannerCandidates(m.bannerImage),
+    posterCandidates: coverCandidates(head.coverImage),
+    backdropCandidates: bannerCandidates(head.bannerImage),
     logoCandidates: [],
-    externalIds: { anilist: String(m.id), ...(m.idMal ? { mal: String(m.idMal) } : {}) },
+    externalIds: { anilist: String(head.id), ...(head.idMal ? { mal: String(head.idMal) } : {}) },
     seasons,
     ...(candidates && candidates.length > 1 ? { candidates } : {}),
     // Legacy flat keys
     name: title,
-    details: m.description ?? null,
-    date: fuzzyDateToString(m.startDate),
-    imageUrl: pickPosterUrl(m.coverImage),
-    backdropUrl: m.bannerImage ?? null,
+    details: stripHtml(head.description),
+    date: firstAirDate,
+    imageUrl: pickPosterUrl(head.coverImage),
+    backdropUrl: head.bannerImage ?? null,
     tagNames: genres,
-    urls: [mediaSiteUrl(m)],
-    seriesExternalId: `anilist:${m.id}`,
-    seasonCount: 1,
-    totalEpisodes: m.episodes ?? undefined,
+    urls: [mediaSiteUrl(head)],
+    seriesExternalId: `anilist:${head.id}`,
+    seasonCount: chain.length,
+    totalEpisodes: totalEpisodes || undefined,
     folderByName: true,
   };
 }
 
-function mediaToCascadeResult(m: AniListMedia): Record<string, unknown> {
-  const episodes = buildEpisodeRecords(m, null);
+/**
+ * Build the cascade response for one season of a chain. The host
+ * passes `seasonNumber` along with the chain head's externalId; we
+ * pick `chain[seasonNumber - 1]` and emit its episode map.
+ */
+function chainToCascadeResult(
+  chain: AniListMedia[],
+  seasonNumber: number,
+): Record<string, unknown> {
+  const head = chain[0];
+  const target = chain[seasonNumber - 1] ?? head;
+  const episodes = buildEpisodeRecords(target, null);
   const episodeMap: Record<string, Record<string, unknown>> = {};
   for (const e of episodes) {
     episodeMap[String(e.episodeNumber)] = {
       episodeNumber: e.episodeNumber,
-      seasonNumber: 1,
+      seasonNumber,
       title: e.title,
       date: null,
       details: null,
     };
   }
 
-  const title = pickTitle(m.title);
+  const totalEpisodes = chain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
   return {
-    name: title,
-    details: m.description ?? null,
-    date: fuzzyDateToString(m.startDate),
-    imageUrl: pickPosterUrl(m.coverImage),
-    backdropUrl: m.bannerImage ?? null,
-    studioName: pickStudio(m.studios),
-    tagNames: m.genres ?? [],
-    urls: [mediaSiteUrl(m)],
-    seriesExternalId: `anilist:${m.id}`,
-    seasonCount: 1,
-    totalEpisodes: m.episodes ?? undefined,
+    name: pickTitle(head.title),
+    details: stripHtml(head.description),
+    date: fuzzyDateToString(head.startDate),
+    imageUrl: pickPosterUrl(head.coverImage),
+    backdropUrl: head.bannerImage ?? null,
+    studioName: pickStudio(head.studios),
+    tagNames: head.genres ?? [],
+    urls: [mediaSiteUrl(head)],
+    seriesExternalId: `anilist:${head.id}`,
+    seasonCount: chain.length,
+    totalEpisodes: totalEpisodes || undefined,
     episodeMap,
   };
 }
@@ -758,7 +908,9 @@ async function folderByName(
   const override = extractAniListIdOverride(input);
   if (override !== null) {
     const m = await fetchMediaById(override);
-    return m ? mediaToFolderResult(m, input) : null;
+    if (!m) return null;
+    const chain = await walkSeasonChain(m);
+    return chainToFolderResult(chain, input);
   }
 
   const query = (input.name as string) ?? (input.title as string) ?? "";
@@ -773,16 +925,23 @@ async function folderByName(
     .sort((a, b) => (b.score - a.score) || (a.order - b.order));
 
   const best = scored[0].m;
-  const candidates = scored.slice(0, 10).map((s) => mediaToCandidate(s.m));
-  return mediaToFolderResult(best, input, candidates);
+  const chain = await walkSeasonChain(best);
+
+  // Filter chain members out of the candidates list — they're folded
+  // into the seasons array now, so showing them as separate picks is
+  // confusing. Movies, OVAs, and specials remain.
+  const chainIds = new Set(chain.map((m) => m.id));
+  const candidates = scored
+    .slice(0, 10)
+    .filter((s) => !chainIds.has(s.m.id))
+    .map((s) => mediaToCandidate(s.m));
+
+  return chainToFolderResult(chain, input, candidates);
 }
 
 async function folderCascade(
   input: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
-  // `seasonNumber` from the host is intentionally ignored — AniList
-  // models each anime cour/season as its own Media entry, so the
-  // externalId already pins us to the right season.
   const override = extractAniListIdOverride(input);
   let id = override;
   if (id === null) {
@@ -793,7 +952,14 @@ async function folderCascade(
     id = Number.parseInt(m[1], 10);
   }
   const media = await fetchMediaById(id);
-  return media ? mediaToCascadeResult(media) : null;
+  if (!media) return null;
+
+  const chain = await walkSeasonChain(media);
+  // The host passes `seasonNumber` indexed against the seasons array
+  // we returned from folderByName. Default to season 1 when absent.
+  const seasonNumber =
+    typeof input.seasonNumber === "number" ? input.seasonNumber : 1;
+  return chainToCascadeResult(chain, seasonNumber);
 }
 
 // ─── Plugin export ────────────────────────────────────────────────
