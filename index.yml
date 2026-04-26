@@ -64,3 +64,19 @@
     audioByFragment: true
     audioByURL: true
     supportsBatch: true
+- id: anilist
+  name: AniList
+  version: 0.1.0
+  date: '2026-04-25'
+  path: plugins/anilist/anilist.zip
+  sha256: 5eea4637b64c17a28bb3d1d41e039a42f37435a9d13b03ad04ff428e6955a64f
+  runtime: typescript
+  isNsfw: false
+  description: Anime identification (TV, movies, OVAs) via the AniList GraphQL API
+  author: Obscura Community
+  capabilities:
+    videoByURL: true
+    videoByName: true
+    folderByName: true
+    folderCascade: true
+    supportsBatch: false

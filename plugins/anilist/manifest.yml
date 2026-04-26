@@ -1,0 +1,20 @@
+id: anilist
+name: AniList
+version: "0.1.0"
+author: "Obscura Community"
+description: "Anime identification (TV, movies, OVAs) via the AniList GraphQL API"
+homepage: "https://anilist.co"
+isNsfw: false
+tags: [anime, tv, series, movies]
+runtime: typescript
+entry: "dist/anilist.js"
+
+# AniList public read queries are unauthenticated, so no auth block.
+# Rate limit is 30 req/min per IP — surfaced via x-ratelimit-* headers.
+
+capabilities:
+  videoByURL: true
+  videoByName: true
+  folderByName: true
+  folderCascade: true
+  supportsBatch: false
