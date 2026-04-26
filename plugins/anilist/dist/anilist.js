@@ -19,7 +19,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const ANILIST_API = "https://graphql.anilist.co";
 const ANILIST_WEB = "https://anilist.co";
-const USER_AGENT = "Obscura-AniList-Plugin/0.3.1";
+const USER_AGENT = "Obscura-AniList-Plugin/0.3.2";
 // Stop walking the SEQUEL/PREQUEL chain after this many entries to
 // bound API calls and protect against pathological cycles.
 const MAX_CHAIN_DEPTH = 10;
@@ -417,9 +417,18 @@ function buildEpisodeRecords(m, local) {
     }
     // Caller-provided local episode layout takes precedence over the
     // AniList total, so we map exactly what the user has on disk.
+    // `matched` means "this episode exists in the AniList Media's
+    // episode range" — streamingEpisodes data is just enrichment
+    // (per-episode title, thumbnail, streaming link) and its absence
+    // shouldn't unmatch otherwise-valid episodes. AniList often has
+    // unreliable or missing per-episode data for sequel/OVA Media but
+    // still knows the episode count.
     if (local && local.length > 0) {
+        const totalKnown = m.episodes ?? 0;
         return local.map((le) => {
             const se = byNum.get(le.episodeNumber);
+            const inRange = le.episodeNumber >= 1 &&
+                (totalKnown === 0 || le.episodeNumber <= totalKnown);
             return {
                 seasonNumber: 1,
                 episodeNumber: le.episodeNumber,
@@ -432,7 +441,7 @@ function buildEpisodeRecords(m, local) {
                     : [],
                 guestStars: [],
                 externalIds: {},
-                matched: Boolean(se),
+                matched: inRange,
                 localFilePath: le.localFilePath || null,
                 streamingUrl: se?.url ?? null,
                 streamingSite: se?.site ?? null,
