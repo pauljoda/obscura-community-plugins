@@ -66,10 +66,10 @@
     supportsBatch: true
 - id: anilist
   name: AniList
-  version: 0.2.1
+  version: 0.3.0
   date: '2026-04-25'
   path: plugins/anilist/anilist.zip
-  sha256: b5b3bc947168696052c57da2ee5f775eb32057956f1ce989132c8f5aeca8e5b5
+  sha256: dbdeb734c8594e9895cec71ff7986d6dce4345e9643570abe44811f7575630f8
   runtime: typescript
   isNsfw: false
   description: Anime identification (TV, movies, OVAs) via the AniList GraphQL API
