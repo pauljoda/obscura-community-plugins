@@ -19,7 +19,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const ANILIST_API = "https://graphql.anilist.co";
 const ANILIST_WEB = "https://anilist.co";
-const USER_AGENT = "Obscura-AniList-Plugin/0.2.1";
+const USER_AGENT = "Obscura-AniList-Plugin/0.3.0";
 // Stop walking the SEQUEL/PREQUEL chain after this many entries to
 // bound API calls and protect against pathological cycles.
 const MAX_CHAIN_DEPTH = 10;
@@ -468,36 +468,35 @@ function buildEpisodeRecords(m, local) {
     return out;
 }
 // ─── Season chain walking ─────────────────────────────────────────
-function pickRelatedMediaId(m, relationType) {
-    const edges = m.relations?.edges ?? [];
-    for (const e of edges) {
+/** Find the first ANIME-type relation edge of a given type, any format. */
+function pickAnyAnimeRelation(m, relationType) {
+    for (const e of m.relations?.edges ?? []) {
         if (e.relationType !== relationType)
             continue;
-        const node = e.node;
-        if (!node || node.type !== "ANIME")
+        if (e.node?.type !== "ANIME")
             continue;
-        if (!TV_CHAIN_FORMATS.has(node.format ?? ""))
-            continue;
-        return node.id;
+        return e.node.id;
     }
     return null;
 }
 /**
- * AniList stores each anime cour/season as its own Media entry (e.g.
- * Attack on Titan S1, S2, Final all have distinct IDs). Walk the
- * PREQUEL chain backward to find the earliest TV entry, then walk
- * SEQUEL forward to assemble the full season list. Returns the chain
- * in season order — index 0 is "Season 1".
+ * Walk SEQUEL/PREQUEL relations to assemble a default seasons list.
  *
- * Movies, OVAs, ONAs, and specials are NOT folded into the chain:
- * users see those as separate disambiguation candidates.
+ * Anime sequel chains aren't always pure TV → TV. Dr. STONE has a
+ * 1-episode SPECIAL (RYUSUI) bridging S2 and S3; if we filtered out
+ * non-TV during traversal we'd stop at S2 and miss everything after.
+ * So we walk through *any* anime format but only include TV/TV_SHORT
+ * in the returned chain. Bridges (movies, specials, OVAs) get
+ * traversed silently and surfaced separately via `seasonOptions`.
+ *
+ * Returns the chain in season order — index 0 is "Season 1".
  */
 async function walkSeasonChain(rootMedia, fetchById = fetchMediaById) {
     const cache = new Map([[rootMedia.id, rootMedia]]);
-    // Walk PREQUEL backward to find earliest TV entry.
+    // Walk PREQUEL backward through any anime format.
     let earliest = rootMedia;
     for (let i = 0; i < MAX_CHAIN_DEPTH; i++) {
-        const prequelId = pickRelatedMediaId(earliest, "PREQUEL");
+        const prequelId = pickAnyAnimeRelation(earliest, "PREQUEL");
         if (prequelId === null || cache.has(prequelId))
             break;
         const prev = await fetchById(prequelId);
@@ -506,14 +505,32 @@ async function walkSeasonChain(rootMedia, fetchById = fetchMediaById) {
         cache.set(prev.id, prev);
         earliest = prev;
     }
-    // Walk SEQUEL forward from the earliest entry to assemble the chain.
-    const chain = [earliest];
+    // The earliest entry might itself be a non-TV bridge (e.g. a
+    // prequel movie). Skip forward until we land on TV-format.
+    for (let i = 0; i < MAX_CHAIN_DEPTH; i++) {
+        if (TV_CHAIN_FORMATS.has(earliest.format ?? ""))
+            break;
+        const nextId = pickAnyAnimeRelation(earliest, "SEQUEL");
+        if (nextId === null || cache.has(nextId))
+            break;
+        const next = await fetchById(nextId);
+        if (!next)
+            break;
+        cache.set(next.id, next);
+        earliest = next;
+    }
+    // Walk SEQUEL forward, traversing through any anime format but
+    // collecting only TV/TV_SHORT into the returned chain.
+    const chain = [];
     const seen = new Set([earliest.id]);
-    while (chain.length < MAX_CHAIN_DEPTH) {
-        const last = chain[chain.length - 1];
-        const sequelId = pickRelatedMediaId(last, "SEQUEL");
+    if (TV_CHAIN_FORMATS.has(earliest.format ?? ""))
+        chain.push(earliest);
+    let current = earliest;
+    for (let i = 0; i < MAX_CHAIN_DEPTH; i++) {
+        const sequelId = pickAnyAnimeRelation(current, "SEQUEL");
         if (sequelId === null || seen.has(sequelId))
             break;
+        seen.add(sequelId);
         let next = cache.get(sequelId) ?? null;
         if (!next) {
             next = await fetchById(sequelId);
@@ -521,10 +538,87 @@ async function walkSeasonChain(rootMedia, fetchById = fetchMediaById) {
                 break;
             cache.set(next.id, next);
         }
-        chain.push(next);
-        seen.add(next.id);
+        if (TV_CHAIN_FORMATS.has(next.format ?? ""))
+            chain.push(next);
+        current = next;
+        if (chain.length >= MAX_CHAIN_DEPTH)
+            break;
+    }
+    // Always return at least the root if it's TV-format and we somehow
+    // ended up with an empty chain (root with no SEQUEL/PREQUEL).
+    if (chain.length === 0 && TV_CHAIN_FORMATS.has(rootMedia.format ?? "")) {
+        chain.push(rootMedia);
     }
     return chain;
+}
+// ─── Related Media gather (for seasonOptions picker) ──────────────
+/**
+ * Lightweight Media projection used in the seasonOptions picker.
+ * Just enough for the host UI to render a card and let the user pick
+ * which AniList Media maps to which season on disk.
+ */
+const RELATED_MEDIA_FIELDS = `
+  id
+  title { romaji english native }
+  format
+  episodes
+  status
+  startDate { year }
+  seasonYear
+  coverImage { large medium }
+  averageScore
+  popularity
+  siteUrl
+  description(asHtml: false)
+`;
+const RELATED_MEDIA_QUERY = `
+  query ($ids: [Int]) {
+    Page(perPage: 50) {
+      media(id_in: $ids, type: ANIME) {
+        ${RELATED_MEDIA_FIELDS}
+      }
+    }
+  }
+`;
+/**
+ * One-hop neighborhood of the chain: every ANIME-type Media linked
+ * from any chain entry's `relations` (sequels, prequels, side stories,
+ * alternative versions, recap movies, specials, etc.) that isn't
+ * already in the chain. Bulk-fetched in a single Page query.
+ */
+async function fetchRelatedAnime(chain) {
+    const chainIds = new Set(chain.map((m) => m.id));
+    const relatedIds = new Set();
+    for (const m of chain) {
+        for (const e of m.relations?.edges ?? []) {
+            const node = e.node;
+            if (!node || node.type !== "ANIME")
+                continue;
+            if (chainIds.has(node.id))
+                continue;
+            relatedIds.add(node.id);
+        }
+    }
+    if (relatedIds.size === 0)
+        return [];
+    const data = await anilistFetch(RELATED_MEDIA_QUERY, { ids: [...relatedIds] });
+    return data.Page?.media ?? [];
+}
+function mediaToSeasonOption(m, relationLabel) {
+    return {
+        externalIds: { anilist: String(m.id) },
+        title: pickTitle(m.title),
+        year: m.seasonYear ?? m.startDate?.year ?? null,
+        format: m.format ?? null,
+        episodes: typeof m.episodes === "number" ? m.episodes : null,
+        status: mapStatus(m.status),
+        posterUrl: pickPosterUrl(m.coverImage),
+        overview: stripHtml(m.description),
+        siteUrl: m.siteUrl ?? null,
+        averageScore: typeof m.averageScore === "number" ? m.averageScore : null,
+        popularity: typeof m.popularity === "number" ? m.popularity : null,
+        relation: relationLabel ?? null,
+    };
 }
 // ─── Result builders ──────────────────────────────────────────────
 function mediaToVideoResult(m) {
@@ -615,8 +709,14 @@ function buildSeasonRecord(m, seasonNumber, localEpisodes) {
  * at the top level. Each chain entry becomes one season. When the
  * caller passes `localSeasons`, episodes for season N are matched
  * against `chain[N-1].streamingEpisodes`.
+ *
+ * `seasonOptions` exposes every related anime Media (chain members
+ * plus one-hop relations of any format) so the host UI can let the
+ * user manually re-map any season to a different AniList entry —
+ * essential for anime where specials, OVAs, recap movies, and
+ * alternative versions blur the "season" concept.
  */
-function chainToFolderResult(chain, input, candidates) {
+function chainToFolderResult(chain, input, candidates, related) {
     const head = chain[0];
     const title = pickTitle(head.title);
     const genres = head.genres ?? [];
@@ -648,6 +748,19 @@ function chainToFolderResult(chain, input, candidates) {
     const endAirDate = fuzzyDateToString(chain[chain.length - 1].endDate);
     const totalEpisodes = chain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
     const lastStatus = mapStatus(chain[chain.length - 1].status);
+    // Build the per-season picker list: chain entries first (in season
+    // order), then related Media sorted by year so the user can pick
+    // logical "this is my season X" mappings.
+    const chainOptions = chain.map((m, i) => mediaToSeasonOption(m, `Season ${i + 1}`));
+    const relatedOptions = (related ?? [])
+        .slice()
+        .sort((a, b) => {
+        const ay = a.seasonYear ?? a.startDate?.year ?? 9999;
+        const by = b.seasonYear ?? b.startDate?.year ?? 9999;
+        return ay - by;
+    })
+        .map((m) => mediaToSeasonOption(m));
+    const seasonOptions = [...chainOptions, ...relatedOptions];
     return {
         title,
         originalTitle: originalTitle(head.title),
@@ -664,6 +777,7 @@ function chainToFolderResult(chain, input, candidates) {
         logoCandidates: [],
         externalIds: { anilist: String(head.id), ...(head.idMal ? { mal: String(head.idMal) } : {}) },
         seasons,
+        seasonOptions,
         ...(candidates && candidates.length > 1 ? { candidates } : {}),
         // Legacy flat keys
         name: title,
@@ -680,14 +794,16 @@ function chainToFolderResult(chain, input, candidates) {
     };
 }
 /**
- * Build the cascade response for one season of a chain. The host
- * passes `seasonNumber` along with the chain head's externalId; we
- * pick `chain[seasonNumber - 1]` and emit its episode map.
+ * Build the cascade response for a single picked Media. The host is
+ * expected to pass the per-season `externalIds.anilist` from the
+ * `seasons[]` array (or a user-overridden pick from `seasonOptions`),
+ * so we trust the externalId literally and emit the episode map for
+ * that exact Media — no chain walking. This lets users manually map
+ * any AniList Media (a special, a recap movie, an alternative
+ * version) to any season slot on disk.
  */
-function chainToCascadeResult(chain, seasonNumber) {
-    const head = chain[0];
-    const target = chain[seasonNumber - 1] ?? head;
-    const episodes = buildEpisodeRecords(target, null);
+function mediaToCascadeResult(m, seasonNumber) {
+    const episodes = buildEpisodeRecords(m, null);
     const episodeMap = {};
     for (const e of episodes) {
         episodeMap[String(e.episodeNumber)] = {
@@ -698,19 +814,17 @@ function chainToCascadeResult(chain, seasonNumber) {
             details: null,
         };
     }
-    const totalEpisodes = chain.reduce((acc, m) => acc + (m.episodes ?? 0), 0);
     return {
-        name: pickTitle(head.title),
-        details: stripHtml(head.description),
-        date: fuzzyDateToString(head.startDate),
-        imageUrl: pickPosterUrl(head.coverImage),
-        backdropUrl: head.bannerImage ?? null,
-        studioName: pickStudio(head.studios),
-        tagNames: head.genres ?? [],
-        urls: [mediaSiteUrl(head)],
-        seriesExternalId: `anilist:${head.id}`,
-        seasonCount: chain.length,
-        totalEpisodes: totalEpisodes || undefined,
+        name: pickTitle(m.title),
+        details: stripHtml(m.description),
+        date: fuzzyDateToString(m.startDate),
+        imageUrl: pickPosterUrl(m.coverImage),
+        backdropUrl: m.bannerImage ?? null,
+        studioName: pickStudio(m.studios),
+        tagNames: m.genres ?? [],
+        urls: [mediaSiteUrl(m)],
+        seriesExternalId: `anilist:${m.id}`,
+        totalEpisodes: m.episodes ?? undefined,
         episodeMap,
     };
 }
@@ -756,13 +870,15 @@ async function folderByName(input) {
     // the user picks a candidate. Respect that pick literally — return
     // a single-Media folder result rather than walking the chain, or
     // the user's selection silently re-anchors back to chain head and
-    // the UI shows no change.
+    // the UI shows no change. We still gather related Media so the
+    // seasonOptions picker stays populated.
     const override = extractAniListIdOverride(input);
     if (override !== null) {
         const m = await fetchMediaById(override);
         if (!m)
             return null;
-        return chainToFolderResult([m], input);
+        const related = await fetchRelatedAnime([m]).catch(() => []);
+        return chainToFolderResult([m], input, undefined, related);
     }
     const query = input.name ?? input.title ?? "";
     if (!query)
@@ -775,7 +891,15 @@ async function folderByName(input) {
         .map((m, i) => ({ m, score: bestTitleSimilarity(query, m.title), order: i }))
         .sort((a, b) => (b.score - a.score) || (a.order - b.order));
     const best = scored[0].m;
-    const chain = await walkSeasonChain(best);
+    // Only expand to a chain when the best match is TV-format. A movie
+    // or OVA pick stands alone as a single "season"; the user can
+    // still see the related TV series via seasonOptions.
+    const chain = TV_CHAIN_FORMATS.has(best.format ?? "")
+        ? await walkSeasonChain(best)
+        : [best];
+    // Walk the relations of every chain entry so seasonOptions covers
+    // bridges and side stories the chain hides.
+    const related = await fetchRelatedAnime(chain).catch(() => []);
     // Filter chain members out of the candidates list — they're folded
     // into the seasons array now, so showing them as separate picks is
     // confusing. Movies, OVAs, and specials remain.
@@ -784,7 +908,7 @@ async function folderByName(input) {
         .slice(0, 10)
         .filter((s) => !chainIds.has(s.m.id))
         .map((s) => mediaToCandidate(s.m));
-    return chainToFolderResult(chain, input, candidates);
+    return chainToFolderResult(chain, input, candidates, related);
 }
 async function folderCascade(input) {
     const override = extractAniListIdOverride(input);
@@ -801,11 +925,12 @@ async function folderCascade(input) {
     const media = await fetchMediaById(id);
     if (!media)
         return null;
-    const chain = await walkSeasonChain(media);
-    // The host passes `seasonNumber` indexed against the seasons array
-    // we returned from folderByName. Default to season 1 when absent.
+    // The host is expected to pass the per-season `externalIds.anilist`
+    // from `seasons[]` (or a user override from `seasonOptions`); we
+    // trust it literally rather than re-deriving via chain walking,
+    // which would silently override user picks.
     const seasonNumber = typeof input.seasonNumber === "number" ? input.seasonNumber : 1;
-    return chainToCascadeResult(chain, seasonNumber);
+    return mediaToCascadeResult(media, seasonNumber);
 }
 // ─── Plugin export ────────────────────────────────────────────────
 exports.default = {
