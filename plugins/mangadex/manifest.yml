@@ -1,0 +1,40 @@
+id: mangadex
+name: MangaDex
+version: "0.1.0"
+author: "Obscura Community"
+description: "Manga and comic book identification via the MangaDex API"
+homepage: "https://mangadex.org"
+isNsfw: false
+tags: [manga, comics, books]
+runtime: typescript
+entry: "dist/mangadex.js"
+
+auth:
+  - key: MANGADEX_CLIENT_ID
+    label: "MangaDex personal client ID"
+    required: true
+    url: "https://mangadex.org/settings"
+  - key: MANGADEX_CLIENT_SECRET
+    label: "MangaDex personal client secret"
+    required: true
+    url: "https://mangadex.org/settings"
+  - key: MANGADEX_USERNAME
+    label: "MangaDex username"
+    required: true
+    url: "https://mangadex.org/login"
+  - key: MANGADEX_PASSWORD
+    label: "MangaDex password"
+    required: true
+    url: "https://mangadex.org/login"
+
+capabilities:
+  bookByURL: true
+  bookByName: true
+  bookByFragment: true
+  comicByURL: true
+  comicByName: true
+  comicByFragment: true
+  mangaByURL: true
+  mangaByName: true
+  mangaByFragment: true
+  supportsBatch: false
