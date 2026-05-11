@@ -9,7 +9,7 @@ const MANGADEX_API = "https://api.mangadex.org";
 const MANGADEX_AUTH = "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token";
 const MANGADEX_WEB = "https://mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
-const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.8";
+const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.9";
 const SFW_CONTENT_RATINGS = ["safe", "suggestive"];
 const ALL_CONTENT_RATINGS = ["safe", "suggestive", "erotica", "pornographic"];
 const DEFAULT_LANGUAGE = "en";
@@ -523,7 +523,7 @@ function coverCandidates(manga, covers, preferredUrl, language) {
                 url,
                 language: coverLanguage,
                 rank: 1,
-                source: volume ? `MangaDex volume ${volume}` : "MangaDex",
+                source: url === preferredUrl ? "MangaDex title cover" : volume ? `MangaDex volume ${volume}` : "MangaDex",
             },
         });
     }
@@ -539,10 +539,10 @@ function coverCandidates(manga, covers, preferredUrl, language) {
     rows.sort((a, b) => {
         if (a.priority !== b.priority)
             return a.priority - b.priority;
-        if (a.volumeKey !== b.volumeKey)
-            return a.volumeKey - b.volumeKey;
         if (a.preferred !== b.preferred)
             return a.preferred ? -1 : 1;
+        if (a.volumeKey !== b.volumeKey)
+            return a.volumeKey - b.volumeKey;
         return a.index - b.index;
     });
     return rows.map((row, index) => ({
