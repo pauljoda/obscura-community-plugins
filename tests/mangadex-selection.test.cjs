@@ -82,13 +82,37 @@ function installMockFetch() {
   };
 }
 
-test("MangaDex search candidates have unique host option ids", async () => {
+test("MangaDex search candidates keep same-language title options with unique host option ids", async () => {
   installMockFetch();
 
   const result = await plugin.execute("mangaByName", { name: "Canonical" }, AUTH);
   const ids = result.book.candidates.map(candidateId);
+  const duplicateLanguageCandidate = result.book.candidates.find(
+    (candidate) => candidate.title === duplicateLanguageAltTitle,
+  );
 
   assert.deepEqual(ids, Array.from(new Set(ids)));
+  assert.equal(duplicateLanguageCandidate.language, "en");
+  assert.equal(duplicateLanguageCandidate.externalIds.language, "en#2");
+});
+
+test("MangaDex selected same-language title option updates title when rehydrating", async () => {
+  installMockFetch();
+
+  const result = await plugin.execute(
+    "mangaByFragment",
+    {
+      externalIds: {
+        mangadex: mangaId,
+        language: "en#2",
+        mangadexTitle: duplicateLanguageAltTitle,
+      },
+    },
+    AUTH,
+  );
+
+  assert.equal(result.book.title, duplicateLanguageAltTitle);
+  assert.equal(result.book.externalIds.language, "en#2");
 });
 
 test("MangaDex selected different entry updates title when rehydrating by external ids", async () => {

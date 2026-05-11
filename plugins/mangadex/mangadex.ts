@@ -9,7 +9,7 @@ const MANGADEX_AUTH =
   "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token";
 const MANGADEX_WEB = "https://mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
-const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.11";
+const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.12";
 const SFW_CONTENT_RATINGS = ["safe", "suggestive"];
 const ALL_CONTENT_RATINGS = ["safe", "suggestive", "erotica", "pornographic"];
 const DEFAULT_LANGUAGE = "en";
@@ -333,6 +333,10 @@ function preferredTitle(manga: MangaResource, language = DEFAULT_LANGUAGE) {
   return alt ? { text: alt.title, language: alt.language } : { text: null, language: null };
 }
 
+function pickerLanguage(language: string): string {
+  return language.split("#", 1)[0] || DEFAULT_LANGUAGE;
+}
+
 function selectedTitle(
   manga: MangaResource,
   language: string,
@@ -564,11 +568,12 @@ function isAdult(manga: MangaResource): boolean {
 function candidateFromManga(
   manga: MangaResource,
   title: { title: string; language: string },
+  pickerLanguage = title.language,
 ): BookCandidate {
   return {
     externalIds: {
       mangadex: manga.id,
-      language: title.language,
+      language: pickerLanguage,
       mangadexTitle: title.title,
     },
     title: title.title,
@@ -592,7 +597,7 @@ async function hydrateCandidatePosters(candidates: BookCandidate[]): Promise<Boo
 
 async function candidatesFromMangaList(manga: MangaResource[]): Promise<BookCandidate[]> {
   const candidates: BookCandidate[] = [];
-  const seenOptionIds = new Set<string>();
+  const optionCounts = new Map<string, number>();
   for (const item of manga) {
     const titles = allTitles(item);
     const ordered = [
@@ -601,9 +606,15 @@ async function candidatesFromMangaList(manga: MangaResource[]): Promise<BookCand
     ];
     for (const title of ordered) {
       const optionId = `${item.id}:${title.language}`;
-      if (seenOptionIds.has(optionId)) continue;
-      seenOptionIds.add(optionId);
-      candidates.push(candidateFromManga(item, title));
+      const count = (optionCounts.get(optionId) ?? 0) + 1;
+      optionCounts.set(optionId, count);
+      candidates.push(
+        candidateFromManga(
+          item,
+          title,
+          count === 1 ? title.language : `${title.language}#${count}`,
+        ),
+      );
       if (candidates.length >= MAX_CANDIDATES) return hydrateCandidatePosters(candidates);
     }
   }
@@ -625,7 +636,8 @@ function bookFromManga(args: {
   chapterTitleByNumber?: Record<string, string>;
   selectedTitle?: string;
 }): Record<string, unknown> {
-  const language = args.language ?? DEFAULT_LANGUAGE;
+  const requestedLanguage = args.language ?? DEFAULT_LANGUAGE;
+  const language = pickerLanguage(requestedLanguage);
   const picked =
     selectedTitle(args.manga, language, args.selectedTitle) ??
     preferredTitle(args.manga, language);
@@ -683,7 +695,7 @@ function bookFromManga(args: {
         ...(chapter ? { mangadexChapter: chapter.id } : {}),
         ...(chapter?.attributes?.chapter ? { chapterNumber: chapter.attributes.chapter } : {}),
         ...(chapter?.attributes?.volume ? { volume: chapter.attributes.volume } : {}),
-        language: chapterLanguage ?? picked.language ?? language,
+        language: chapterLanguage ?? args.language ?? picked.language ?? language,
       },
       candidates: args.candidates,
     },
@@ -1346,20 +1358,21 @@ async function bookByFragment(
     const manga = await fetchManga(ids.mangadex, auth, input);
     const covers = manga ? await fetchCovers(manga.id, auth) : [];
     const imageUrl = manga ? coverUrl(manga) : null;
+    const language = pickerLanguage(ids.language ?? DEFAULT_LANGUAGE);
     const coverSet = manga
-      ? await prepareCoverSet(manga, covers, imageUrl, ids.language ?? DEFAULT_LANGUAGE)
+      ? await prepareCoverSet(manga, covers, imageUrl, language)
       : null;
     const chapterImageByNumber = manga
-      ? await prepareChapterImageMap(manga, auth, input, ids.language ?? DEFAULT_LANGUAGE)
+      ? await prepareChapterImageMap(manga, auth, input, language)
       : undefined;
     const chapterVolumeByNumber = manga
-      ? await prepareChapterVolumeMap(manga, auth, input, ids.language ?? DEFAULT_LANGUAGE)
+      ? await prepareChapterVolumeMap(manga, auth, input, language)
       : undefined;
     const chapterTitleByNumber = manga
-      ? await prepareChapterTitleMap(manga, auth, input, ids.language ?? DEFAULT_LANGUAGE)
+      ? await prepareChapterTitleMap(manga, auth, input, language)
       : undefined;
     const chapterImageCandidates = chapterImageCandidatesFromMap(chapterImageByNumber);
-    const volumeCovers = manga ? await prepareVolumeCovers(manga, covers, ids.language ?? DEFAULT_LANGUAGE) : undefined;
+    const volumeCovers = manga ? await prepareVolumeCovers(manga, covers, language) : undefined;
     return manga
       ? bookFromManga({
           manga,
@@ -1402,37 +1415,39 @@ async function bookByFragment(
   const best = first
     ? (sorted.find((manga) => manga.id === first.externalIds.mangadex) ?? sorted[0])
     : sorted[0];
+  const firstLanguage = first?.externalIds.language ?? DEFAULT_LANGUAGE;
+  const language = pickerLanguage(firstLanguage);
   const covers = await fetchCovers(best.id, auth);
   const imageUrl = coverUrl(best);
   const coverSet = await prepareCoverSet(
     best,
     covers,
     imageUrl,
-    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+    language,
   );
   const chapterImageByNumber = await prepareChapterImageMap(
     best,
     auth,
     input,
-    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+    language,
   );
   const chapterVolumeByNumber = await prepareChapterVolumeMap(
     best,
     auth,
     input,
-    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+    language,
   );
   const chapterTitleByNumber = await prepareChapterTitleMap(
     best,
     auth,
     input,
-    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+    language,
   );
   const chapterImageCandidates = chapterImageCandidatesFromMap(chapterImageByNumber);
-  const volumeCovers = await prepareVolumeCovers(best, covers, first?.externalIds.language ?? DEFAULT_LANGUAGE);
+  const volumeCovers = await prepareVolumeCovers(best, covers, language);
   return bookFromManga({
     manga: best,
-    language: first?.externalIds.language ?? DEFAULT_LANGUAGE,
+    language: firstLanguage,
     selectedTitle: first?.externalIds.mangadexTitle,
     candidates,
     imageUrl: coverSet.imageUrl,
