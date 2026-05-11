@@ -85,7 +85,7 @@
   version: 0.1.9
   date: '2026-05-11'
   path: plugins/mangadex/mangadex.zip
-  sha256: 20aeb7b077a435dd3d8b11373fe1653a777ffc7014830d791b9104d6328dd866
+  sha256: 75568775236194c5e86a526518c718986dd2156b20f55ee5e08cd6907af3ac37
   runtime: typescript
   isNsfw: false
   description: Manga and comic book identification via the MangaDex API

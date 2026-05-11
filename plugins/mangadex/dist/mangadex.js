@@ -170,6 +170,15 @@ function preferredTitle(manga, language = DEFAULT_LANGUAGE) {
     const alt = titles.find((title) => title.language === language) ?? titles[0];
     return alt ? { text: alt.title, language: alt.language } : { text: null, language: null };
 }
+function selectedTitle(manga, language, title) {
+    const trimmed = title?.trim();
+    if (!trimmed)
+        return null;
+    const titles = allTitles(manga);
+    const exact = titles.find((row) => row.title === trimmed && row.language === language) ??
+        titles.find((row) => row.title === trimmed);
+    return exact ? { text: exact.title, language: exact.language } : null;
+}
 function coverUrlFromFileName(mangaId, fileName) {
     if (typeof fileName !== "string" || !fileName)
         return null;
@@ -357,7 +366,11 @@ function isAdult(manga) {
 }
 function candidateFromManga(manga, title) {
     return {
-        externalIds: { mangadex: manga.id, language: title.language },
+        externalIds: {
+            mangadex: manga.id,
+            language: title.language,
+            mangadexTitle: title.title,
+        },
         title: title.title,
         year: manga.attributes?.year ?? null,
         overview: parsedDescription(manga, title.language).description,
@@ -391,7 +404,8 @@ async function candidatesFromMangaList(manga) {
 }
 function bookFromManga(args) {
     const language = args.language ?? DEFAULT_LANGUAGE;
-    const picked = preferredTitle(args.manga, language);
+    const picked = selectedTitle(args.manga, language, args.selectedTitle) ??
+        preferredTitle(args.manga, language);
     const attrs = args.manga.attributes ?? {};
     const title = picked.text ?? "MangaDex title";
     const chapter = args.chapter;
@@ -971,6 +985,7 @@ async function bookByFragment(input, auth) {
             ? bookFromManga({
                 manga,
                 language: ids.language,
+                selectedTitle: ids.mangadexTitle,
                 chapter,
                 imageUrl: mangaCoverSet?.imageUrl,
                 chapterImageUrl,
@@ -1005,6 +1020,7 @@ async function bookByFragment(input, auth) {
             ? bookFromManga({
                 manga,
                 language: ids.language,
+                selectedTitle: ids.mangadexTitle,
                 imageUrl: coverSet?.imageUrl,
                 imageCandidates: coverSet?.candidates,
                 chapterImageCandidates,
@@ -1052,6 +1068,7 @@ async function bookByFragment(input, auth) {
     return bookFromManga({
         manga: best,
         language: first?.externalIds.language ?? DEFAULT_LANGUAGE,
+        selectedTitle: first?.externalIds.mangadexTitle,
         candidates,
         imageUrl: coverSet.imageUrl,
         imageCandidates: coverSet.candidates,
