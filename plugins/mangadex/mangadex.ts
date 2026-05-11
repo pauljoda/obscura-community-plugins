@@ -9,11 +9,14 @@ const MANGADEX_AUTH =
   "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token";
 const MANGADEX_WEB = "https://mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
-const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.0";
+const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.2";
 const SFW_CONTENT_RATINGS = ["safe", "suggestive"];
 const ALL_CONTENT_RATINGS = ["safe", "suggestive", "erotica", "pornographic"];
 const DEFAULT_LANGUAGE = "en";
 const MAX_CANDIDATES = 20;
+const MAX_IMAGE_CANDIDATES = 20;
+const CHAPTER_FEED_PAGE_SIZE = 100;
+const CHAPTER_COVER_FETCH_CONCURRENCY = 4;
 
 interface MangaDexRelationship {
   id: string;
@@ -84,6 +87,9 @@ interface ApiSingle<T> {
 interface ApiList<T> {
   result: string;
   data: T[];
+  limit?: number;
+  offset?: number;
+  total?: number;
 }
 
 interface BookCandidate {
@@ -105,6 +111,16 @@ interface ImageCandidate {
   aspectRatio?: number;
   rank?: number;
   source: string;
+}
+
+interface AtHomeServerResponse {
+  result?: string;
+  baseUrl: string;
+  chapter?: {
+    hash?: string;
+    data?: string[];
+    dataSaver?: string[];
+  };
 }
 
 interface AuthTokenResponse {
@@ -299,7 +315,7 @@ function preferredTitle(manga: MangaResource, language = DEFAULT_LANGUAGE) {
 
 function coverUrlFromFileName(mangaId: string, fileName: unknown): string | null {
   if (typeof fileName !== "string" || !fileName) return null;
-  return `${MANGADEX_UPLOADS}/covers/${mangaId}/${fileName}`;
+  return `${MANGADEX_UPLOADS}/covers/${mangaId}/${fileName}.512.jpg`;
 }
 
 function coverUrl(manga: MangaResource): string | null {
@@ -314,6 +330,30 @@ function coverResourceUrl(mangaId: string, cover: CoverResource): string | null 
 function coverVolume(cover: CoverResource): string | null {
   const volume = cover.attributes?.volume?.trim();
   return volume || null;
+}
+
+function languagePriority(
+  language: string | null | undefined,
+  preferredLanguage: string | null | undefined,
+  fallbackLanguage: string | null | undefined,
+): number {
+  const normalizedLanguage = language?.trim().toLowerCase();
+  const preferred = uniqueStrings([
+    preferredLanguage,
+    preferredLanguage === DEFAULT_LANGUAGE ? null : DEFAULT_LANGUAGE,
+    fallbackLanguage,
+  ]).map((item) => item.toLowerCase());
+  const preferredIndex = normalizedLanguage
+    ? preferred.indexOf(normalizedLanguage)
+    : -1;
+  if (preferredIndex >= 0) return preferredIndex;
+  return normalizedLanguage ? preferred.length + 1 : preferred.length;
+}
+
+function volumeSortKey(volume: string | null): number {
+  if (!volume) return Number.MAX_SAFE_INTEGER;
+  const numeric = Number.parseFloat(volume);
+  return Number.isFinite(numeric) ? numeric : Number.MAX_SAFE_INTEGER - 1;
 }
 
 function relationshipNames(manga: MangaResource, types: string[]): string[] {
@@ -364,13 +404,32 @@ function titleCase(value: string): string {
   return value.slice(0, 1).toUpperCase() + value.slice(1).toLowerCase();
 }
 
+function markdownCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownSeparatorCell(cell: string): boolean {
+  return /^:?-+:?$/.test(cell.trim());
+}
+
+function isTagTableHeader(cells: string[]): boolean {
+  const normalized = cells
+    .map((cell) => cell.toLowerCase())
+    .filter(Boolean);
+  if (normalized.length === 1) return normalized[0] === "tags";
+  return normalized.includes("namespace") && normalized.includes("tags");
+}
+
 function parseDescriptionTags(text: string | null): ParsedDescription {
   if (!text) return { description: null, artists: [], group: null, tagNames: [] };
 
   const lines = text.split(/\r?\n/);
-  const tagsIndex = lines.findIndex(
-    (line) => line.replace(/[|\s]/g, "").toLowerCase() === "tags",
-  );
+  const tagsIndex = lines.findIndex((line) => isTagTableHeader(markdownCells(line)));
   if (tagsIndex === -1) {
     return { description: text.trim() || null, artists: [], group: null, tagNames: [] };
   }
@@ -383,9 +442,10 @@ function parseDescriptionTags(text: string | null): ParsedDescription {
   for (const line of lines.slice(tagsIndex + 1)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("|")) continue;
-    const parts = trimmed.split("|").map((part) => part.trim());
-    const key = parts[1]?.toLowerCase();
-    const value = parts.slice(2).join("|").trim();
+    const cells = markdownCells(trimmed);
+    if (cells.every(isMarkdownSeparatorCell)) continue;
+    const key = cells[0]?.toLowerCase();
+    const value = cells.slice(1).join(", ").trim();
     if (
       !key ||
       !/[\p{L}\p{N}]/u.test(key) ||
@@ -504,9 +564,11 @@ function bookFromManga(args: {
   language?: string;
   candidates?: BookCandidate[];
   chapter?: ChapterResource | null;
+  imageUrl?: string | null;
   chapterImageUrl?: string | null;
   imageCandidates?: ImageCandidate[];
   chapterImageCandidates?: ImageCandidate[];
+  chapterImageByNumber?: Record<string, ImageCandidate>;
 }): Record<string, unknown> {
   const language = args.language ?? DEFAULT_LANGUAGE;
   const picked = preferredTitle(args.manga, language);
@@ -528,7 +590,7 @@ function bookFromManga(args: {
       .filter(Boolean)
       .join("\n\n") || null;
   const chapterLanguage = chapter?.attributes?.translatedLanguage;
-  const imageUrl = args.chapterImageUrl ?? coverUrl(args.manga);
+  const imageUrl = args.imageUrl ?? args.chapterImageUrl ?? coverUrl(args.manga);
   const studioName = chapter ? (chapterGroupName(chapter) ?? parsed.group) : parsed.group;
   const performerNames = uniqueStrings([
     ...relationshipNames(args.manga, ["author", "artist"]),
@@ -554,6 +616,7 @@ function bookFromManga(args: {
       chapterNumber: chapter?.attributes?.chapter ?? null,
       imageCandidates: args.imageCandidates,
       chapterImageCandidates: args.chapterImageCandidates,
+      chapterImageByNumber: args.chapterImageByNumber,
       isNsfw: isAdult(args.manga),
       externalIds: {
         mangadex: args.manga.id,
@@ -620,12 +683,24 @@ async function fetchCovers(
   mangaId: string,
   auth: Record<string, string>,
 ): Promise<CoverResource[]> {
-  const res = await mangadexFetch<ApiList<CoverResource>>("/cover", auth, {
-    "manga[]": [mangaId],
-    limit: "100",
-    "order[volume]": "asc",
-  });
-  return res.data ?? [];
+  const covers: CoverResource[] = [];
+  let offset = 0;
+
+  while (true) {
+    const res = await mangadexFetch<ApiList<CoverResource>>("/cover", auth, {
+      "manga[]": [mangaId],
+      limit: "100",
+      offset: String(offset),
+      "order[volume]": "asc",
+    });
+    covers.push(...(res.data ?? []));
+
+    const total = res.total ?? covers.length;
+    if (!res.data.length || covers.length >= total) break;
+    offset += res.data.length;
+  }
+
+  return covers;
 }
 
 function mangaIdFromChapter(chapter: ChapterResource): string | null {
@@ -636,25 +711,222 @@ function coverCandidates(
   manga: MangaResource,
   covers: CoverResource[],
   preferredUrl: string | null,
+  language: string | null | undefined,
 ): ImageCandidate[] {
-  const candidates: ImageCandidate[] = [];
+  const rows: Array<{
+    candidate: ImageCandidate;
+    index: number;
+    preferred: boolean;
+    priority: number;
+    volumeKey: number;
+  }> = [];
+
   for (const [index, cover] of covers.entries()) {
     const url = coverResourceUrl(manga.id, cover);
     if (!url) continue;
-    const rank = url === preferredUrl ? 100 : Math.max(1, 90 - index);
-    candidates.push({
-      url,
-      language: cover.attributes?.locale ?? manga.attributes?.originalLanguage ?? null,
-      rank,
-      source: coverVolume(cover) ? `MangaDex volume ${coverVolume(cover)}` : "MangaDex",
+    const coverLanguage = cover.attributes?.locale ?? manga.attributes?.originalLanguage ?? null;
+    const volume = coverVolume(cover);
+    rows.push({
+      index,
+      preferred: url === preferredUrl,
+      priority: languagePriority(coverLanguage, language, manga.attributes?.originalLanguage),
+      volumeKey: volumeSortKey(volume),
+      candidate: {
+        url,
+        language: coverLanguage,
+        rank: 1,
+        source: volume ? `MangaDex volume ${volume}` : "MangaDex",
+      },
     });
   }
 
-  if (preferredUrl && !candidates.some((candidate) => candidate.url === preferredUrl)) {
-    candidates.unshift({ url: preferredUrl, rank: 100, source: "MangaDex" });
+  if (preferredUrl && !rows.some((row) => row.candidate.url === preferredUrl)) {
+    rows.push({
+      candidate: { url: preferredUrl, rank: 1, source: "MangaDex" },
+      index: rows.length,
+      preferred: true,
+      priority: languagePriority(null, language, manga.attributes?.originalLanguage),
+      volumeKey: Number.MAX_SAFE_INTEGER,
+    });
   }
 
-  return candidates;
+  rows.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    if (a.volumeKey !== b.volumeKey) return a.volumeKey - b.volumeKey;
+    if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+    return a.index - b.index;
+  });
+
+  return rows.map((row, index) => ({
+    ...row.candidate,
+    rank: Math.max(1, 100 - row.priority * 20 - index),
+  }));
+}
+
+function chapterNumberKey(chapterNumber: string | null | undefined): string | null {
+  const trimmed = chapterNumber?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  return String(Number.parseInt(trimmed, 10));
+}
+
+async function imageDataUrl(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        Referer: `${MANGADEX_WEB}/`,
+        "User-Agent": USER_AGENT,
+      },
+    });
+    if (!res.ok) return url;
+    const contentType = res.headers.get("content-type")?.split(";")[0]?.trim();
+    if (!contentType?.startsWith("image/")) return url;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes.length) return url;
+    let binary = "";
+    const chunkSize = 8192;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+    }
+    return `data:${contentType};base64,${btoa(binary)}`;
+  } catch {
+    return url;
+  }
+}
+
+async function fetchChapterImageCandidate(
+  chapter: ChapterResource,
+  auth: Record<string, string>,
+): Promise<ImageCandidate | null> {
+  const numberKey = chapterNumberKey(chapter.attributes?.chapter);
+  if (!numberKey) return null;
+
+  const res = await mangadexFetch<AtHomeServerResponse>(
+    `/at-home/server/${chapter.id}`,
+    auth,
+  );
+  const hash = res.chapter?.hash;
+  const fileName = res.chapter?.dataSaver?.[0] ?? res.chapter?.data?.[0];
+  if (!res.baseUrl || !hash || !fileName) return null;
+
+  const quality = res.chapter?.dataSaver?.[0] ? "data-saver" : "data";
+  const url = `${res.baseUrl}/${quality}/${hash}/${fileName}`;
+  const hydratedUrl = await imageDataUrl(url);
+  const chapterLabel = chapter.attributes?.chapter
+    ? `MangaDex chapter ${chapter.attributes.chapter}`
+    : "MangaDex chapter";
+
+  return {
+    url: hydratedUrl,
+    language: chapter.attributes?.translatedLanguage ?? null,
+    rank: 100,
+    source: chapterLabel,
+  };
+}
+
+async function fetchMangaChapters(
+  mangaId: string,
+  auth: Record<string, string>,
+  input: Record<string, unknown>,
+  language: string | null | undefined,
+): Promise<ChapterResource[]> {
+  const chapters: ChapterResource[] = [];
+  let offset = 0;
+
+  while (true) {
+    const params: Record<string, string | string[]> = {
+      limit: String(CHAPTER_FEED_PAGE_SIZE),
+      offset: String(offset),
+      "order[volume]": "asc",
+      "order[chapter]": "asc",
+      "contentRating[]": allowedContentRatings(input),
+    };
+    if (language) params["translatedLanguage[]"] = [language];
+
+    const res = await mangadexFetch<ApiList<ChapterResource>>(
+      `/manga/${mangaId}/feed`,
+      auth,
+      params,
+    );
+    chapters.push(...(res.data ?? []));
+
+    const total = res.total ?? chapters.length;
+    if (!res.data.length || chapters.length >= total) break;
+    offset += res.data.length;
+  }
+
+  return chapters;
+}
+
+async function prepareChapterImageMap(
+  manga: MangaResource,
+  auth: Record<string, string>,
+  input: Record<string, unknown>,
+  language: string | null | undefined,
+): Promise<Record<string, ImageCandidate>> {
+  let chapters: ChapterResource[] = [];
+  const languages = uniqueStrings([
+    language,
+    language === DEFAULT_LANGUAGE ? null : DEFAULT_LANGUAGE,
+    manga.attributes?.originalLanguage,
+  ]);
+
+  for (const candidateLanguage of languages) {
+    chapters = await fetchMangaChapters(manga.id, auth, input, candidateLanguage);
+    if (chapters.length > 0) break;
+  }
+  if (chapters.length === 0) {
+    chapters = await fetchMangaChapters(manga.id, auth, input, null);
+  }
+
+  const seen = new Set<string>();
+  const uniqueChapters: ChapterResource[] = [];
+  for (const chapter of chapters) {
+    const key = chapterNumberKey(chapter.attributes?.chapter);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    uniqueChapters.push(chapter);
+  }
+
+  const out: Record<string, ImageCandidate> = {};
+  for (let index = 0; index < uniqueChapters.length; index += CHAPTER_COVER_FETCH_CONCURRENCY) {
+    const batch = uniqueChapters.slice(index, index + CHAPTER_COVER_FETCH_CONCURRENCY);
+    const candidates = await Promise.all(
+      batch.map((chapter) => fetchChapterImageCandidate(chapter, auth).catch(() => null)),
+    );
+    for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
+      const key = chapterNumberKey(batch[batchIndex]?.attributes?.chapter);
+      const candidate = candidates[batchIndex];
+      if (key && candidate) out[key] = candidate;
+    }
+  }
+
+  return out;
+}
+
+async function hydrateImageCandidates(candidates: ImageCandidate[]): Promise<ImageCandidate[]> {
+  return Promise.all(
+    candidates.slice(0, MAX_IMAGE_CANDIDATES).map(async (candidate) => ({
+      ...candidate,
+      url: await imageDataUrl(candidate.url),
+    })),
+  );
+}
+
+async function prepareCoverSet(
+  manga: MangaResource,
+  covers: CoverResource[],
+  preferredUrl: string | null,
+  language: string | null | undefined,
+): Promise<{ imageUrl: string | null; candidates: ImageCandidate[] }> {
+  const candidates = await hydrateImageCandidates(
+    coverCandidates(manga, covers, preferredUrl, language),
+  );
+  const preferred = candidates[0];
+  return {
+    imageUrl: preferred?.url ?? preferredUrl,
+    candidates,
+  };
 }
 
 function chapterCoverUrl(
@@ -687,8 +959,19 @@ async function bookByURL(
     const manga = await fetchManga(parsed.id, auth, input);
     const covers = manga ? await fetchCovers(manga.id, auth) : [];
     const imageUrl = manga ? coverUrl(manga) : null;
+    const coverSet = manga
+      ? await prepareCoverSet(manga, covers, imageUrl, DEFAULT_LANGUAGE)
+      : null;
+    const chapterImageByNumber = manga
+      ? await prepareChapterImageMap(manga, auth, input, DEFAULT_LANGUAGE)
+      : undefined;
     return manga
-      ? bookFromManga({ manga, imageCandidates: coverCandidates(manga, covers, imageUrl) })
+      ? bookFromManga({
+          manga,
+          imageUrl: coverSet?.imageUrl,
+          imageCandidates: coverSet?.candidates,
+          chapterImageByNumber,
+        })
       : null;
   }
 
@@ -699,14 +982,26 @@ async function bookByURL(
   const manga = await fetchManga(mangaId, auth, input);
   const covers = manga ? await fetchCovers(manga.id, auth) : [];
   const selectedCover = manga ? chapterCoverUrl(manga, chapter, covers) : null;
+  const chapterLanguage = chapter.attributes?.translatedLanguage ?? DEFAULT_LANGUAGE;
+  const mangaCoverSet = manga
+    ? await prepareCoverSet(manga, covers, coverUrl(manga), chapterLanguage)
+    : null;
+  const chapterCoverSet = manga
+    ? await prepareCoverSet(manga, covers, selectedCover, chapterLanguage)
+    : null;
+  const chapterImageByNumber = manga
+    ? await prepareChapterImageMap(manga, auth, input, chapterLanguage)
+    : undefined;
   return manga
     ? bookFromManga({
         manga,
-        language: chapter.attributes?.translatedLanguage ?? DEFAULT_LANGUAGE,
+        language: chapterLanguage,
         chapter,
-        chapterImageUrl: selectedCover,
-        imageCandidates: coverCandidates(manga, covers, coverUrl(manga)),
-        chapterImageCandidates: coverCandidates(manga, covers, selectedCover),
+        imageUrl: mangaCoverSet?.imageUrl,
+        chapterImageUrl: chapterCoverSet?.imageUrl,
+        imageCandidates: mangaCoverSet?.candidates,
+        chapterImageCandidates: chapterCoverSet?.candidates,
+        chapterImageByNumber,
       })
     : null;
 }
@@ -768,14 +1063,27 @@ async function bookByFragment(
     const manga = mangaId ? await fetchManga(mangaId, auth, input) : null;
     const covers = manga ? await fetchCovers(manga.id, auth) : [];
     const selectedCover = manga && chapter ? chapterCoverUrl(manga, chapter, covers) : null;
+    const chapterLanguage =
+      chapter?.attributes?.translatedLanguage ?? ids.language ?? DEFAULT_LANGUAGE;
+    const mangaCoverSet = manga
+      ? await prepareCoverSet(manga, covers, coverUrl(manga), chapterLanguage)
+      : null;
+    const chapterCoverSet = manga
+      ? await prepareCoverSet(manga, covers, selectedCover, chapterLanguage)
+      : null;
+    const chapterImageByNumber = manga
+      ? await prepareChapterImageMap(manga, auth, input, chapterLanguage)
+      : undefined;
     return manga && chapter
       ? bookFromManga({
           manga,
           language: ids.language,
           chapter,
-          chapterImageUrl: selectedCover,
-          imageCandidates: coverCandidates(manga, covers, coverUrl(manga)),
-          chapterImageCandidates: coverCandidates(manga, covers, selectedCover),
+          imageUrl: mangaCoverSet?.imageUrl,
+          chapterImageUrl: chapterCoverSet?.imageUrl,
+          imageCandidates: mangaCoverSet?.candidates,
+          chapterImageCandidates: chapterCoverSet?.candidates,
+          chapterImageByNumber,
         })
       : null;
   }
@@ -783,11 +1091,19 @@ async function bookByFragment(
     const manga = await fetchManga(ids.mangadex, auth, input);
     const covers = manga ? await fetchCovers(manga.id, auth) : [];
     const imageUrl = manga ? coverUrl(manga) : null;
+    const coverSet = manga
+      ? await prepareCoverSet(manga, covers, imageUrl, ids.language ?? DEFAULT_LANGUAGE)
+      : null;
+    const chapterImageByNumber = manga
+      ? await prepareChapterImageMap(manga, auth, input, ids.language ?? DEFAULT_LANGUAGE)
+      : undefined;
     return manga
       ? bookFromManga({
           manga,
           language: ids.language,
-          imageCandidates: coverCandidates(manga, covers, imageUrl),
+          imageUrl: coverSet?.imageUrl,
+          imageCandidates: coverSet?.candidates,
+          chapterImageByNumber,
         })
       : null;
   }
@@ -820,11 +1136,25 @@ async function bookByFragment(
     : sorted[0];
   const covers = await fetchCovers(best.id, auth);
   const imageUrl = coverUrl(best);
+  const coverSet = await prepareCoverSet(
+    best,
+    covers,
+    imageUrl,
+    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+  );
+  const chapterImageByNumber = await prepareChapterImageMap(
+    best,
+    auth,
+    input,
+    first?.externalIds.language ?? DEFAULT_LANGUAGE,
+  );
   return bookFromManga({
     manga: best,
     language: first?.externalIds.language ?? DEFAULT_LANGUAGE,
     candidates,
-    imageCandidates: coverCandidates(best, covers, imageUrl),
+    imageUrl: coverSet.imageUrl,
+    imageCandidates: coverSet.candidates,
+    chapterImageByNumber,
   });
 }
 
