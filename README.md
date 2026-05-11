@@ -21,7 +21,7 @@ Community-maintained metadata-identification plugins for [Obscura](https://paulj
 | [YouTube Metadata](./plugins/youtube) | 0.3.0 | TypeScript | `videoByURL`, `audioByURL`, `supportsBatch` | No | Video/audio metadata from YouTube URLs (oEmbed + optional Data API) |
 | [MusicBrainz](./plugins/musicbrainz) | 0.2.0 | Python | `audioLibraryByName`, `audioByFragment`, `audioByURL`, `supportsBatch` | No | Music metadata via MusicBrainz and Cover Art Archive |
 | [AniList](./plugins/anilist) | 0.1.0 | TypeScript | `videoByURL`, `videoByName`, `folderByName`, `folderCascade` | No | Anime identification (TV, movies, OVAs) via the AniList GraphQL API |
-| [MangaDex](./plugins/mangadex) | 0.1.10 | TypeScript | `bookByURL`, `bookByName`, `bookByFragment`, `comicByURL`, `comicByName`, `comicByFragment`, `mangaByURL`, `mangaByName`, `mangaByFragment` | No | Manga and comic book identification via MangaDex |
+| [MangaDex](./plugins/mangadex) | 0.1.11 | TypeScript | `bookByURL`, `bookByName`, `bookByFragment`, `comicByURL`, `comicByName`, `comicByFragment`, `mangaByURL`, `mangaByName`, `mangaByFragment` | No | Manga and comic book identification via MangaDex |
 
 `index.yml` is the source of truth. The table above is for humans.
 

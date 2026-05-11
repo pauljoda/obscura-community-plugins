@@ -82,10 +82,10 @@
     supportsBatch: false
 - id: mangadex
   name: MangaDex
-  version: 0.1.10
+  version: 0.1.11
   date: '2026-05-11'
   path: plugins/mangadex/mangadex.zip
-  sha256: da471242da62fc929dfb7bc374227d44303976c9561aabfe2d6ba761ed50cad9
+  sha256: c8550272379ce7c74b876a5b4ffb87327d95fdc290e738831789e91cc3c377f4
   runtime: typescript
   isNsfw: false
   description: Manga and comic book identification via the MangaDex API

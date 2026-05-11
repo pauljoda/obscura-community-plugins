@@ -9,7 +9,7 @@ const MANGADEX_AUTH =
   "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token";
 const MANGADEX_WEB = "https://mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
-const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.10";
+const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.11";
 const SFW_CONTENT_RATINGS = ["safe", "suggestive"];
 const ALL_CONTENT_RATINGS = ["safe", "suggestive", "erotica", "pornographic"];
 const DEFAULT_LANGUAGE = "en";
@@ -592,6 +592,7 @@ async function hydrateCandidatePosters(candidates: BookCandidate[]): Promise<Boo
 
 async function candidatesFromMangaList(manga: MangaResource[]): Promise<BookCandidate[]> {
   const candidates: BookCandidate[] = [];
+  const seenOptionIds = new Set<string>();
   for (const item of manga) {
     const titles = allTitles(item);
     const ordered = [
@@ -599,6 +600,9 @@ async function candidatesFromMangaList(manga: MangaResource[]): Promise<BookCand
       ...titles.filter((title) => title.language !== DEFAULT_LANGUAGE),
     ];
     for (const title of ordered) {
+      const optionId = `${item.id}:${title.language}`;
+      if (seenOptionIds.has(optionId)) continue;
+      seenOptionIds.add(optionId);
       candidates.push(candidateFromManga(item, title));
       if (candidates.length >= MAX_CANDIDATES) return hydrateCandidatePosters(candidates);
     }
