@@ -1,6 +1,6 @@
 id: mangadex
 name: MangaDex
-version: "0.1.9"
+version: "0.1.10"
 author: "Obscura Community"
 description: "Manga and comic book identification via the MangaDex API"
 homepage: "https://mangadex.org"

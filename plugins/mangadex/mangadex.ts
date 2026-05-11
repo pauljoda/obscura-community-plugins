@@ -9,7 +9,7 @@ const MANGADEX_AUTH =
   "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token";
 const MANGADEX_WEB = "https://mangadex.org";
 const MANGADEX_UPLOADS = "https://uploads.mangadex.org";
-const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.9";
+const USER_AGENT = "Obscura-MangaDex-Plugin/0.1.10";
 const SFW_CONTENT_RATINGS = ["safe", "suggestive"];
 const ALL_CONTENT_RATINGS = ["safe", "suggestive", "erotica", "pornographic"];
 const DEFAULT_LANGUAGE = "en";
