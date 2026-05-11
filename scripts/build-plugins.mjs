@@ -65,6 +65,7 @@ function buildTypeScript(pluginDir) {
   if (res.status !== 0) {
     throw new Error(`tsc failed for ${pluginDir}`);
   }
+  writeFileSync(join(distDir, "package.json"), JSON.stringify({ type: "commonjs" }, null, 2) + "\n");
 }
 
 function zipPlugin(pluginDir) {

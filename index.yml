@@ -6,7 +6,7 @@
   version: 0.2.0
   date: '2026-04-17'
   path: plugins/tvdb/tvdb.zip
-  sha256: a54ff0bc257c923faeb90025194375feb3b2e00d33907c66dee81aba7ca8aa24
+  sha256: 4cafda032a62587f8e6aa1568602f5aad60981e56c2cae46f4ee15c85fdc79f4
   runtime: typescript
   isNsfw: false
   description: TV series, seasons, and episode identification via TVDB v4 API
@@ -24,7 +24,7 @@
   version: 0.3.1
   date: '2026-04-16'
   path: plugins/tmdb/tmdb.zip
-  sha256: 98a7edb20dba9a8a1697b5278e186ab348560af1f94a0a2e7604c83a71881c75
+  sha256: f3eda9ef9dc164e8e8a4be83c8cde6ba6eecd9bd501ae0b0cdd90d0c4331f702
   runtime: typescript
   isNsfw: false
   description: Movie and TV series identification via TMDB API
@@ -37,10 +37,10 @@
     supportsBatch: false
 - id: youtube
   name: YouTube Metadata
-  version: 0.3.0
+  version: 0.5.0
   date: '2026-04-17'
   path: plugins/youtube/youtube.zip
-  sha256: 35408c5e5855f2d89b4d5ee912f472221e3917a2701eedde51844b6b92eb3d23
+  sha256: 4e5011beb647f16a9a9392ae9411c7b360a997ea5b03516e45d51eba010a9603
   runtime: typescript
   isNsfw: false
   description: Video and audio metadata from YouTube URLs (oEmbed + optional Data API)
@@ -54,7 +54,7 @@
   version: 0.2.0
   date: '2026-04-17'
   path: plugins/musicbrainz/musicbrainz.zip
-  sha256: 66efad7013e7551477fb493daef5c94c7c63a280b521acf1e278282adac60891
+  sha256: d227d8f8779bad09113af4b7846fa16f0cd365328580a8357a3ff11055f640cc
   runtime: python
   isNsfw: false
   description: Music metadata identification via MusicBrainz and Cover Art Archive
@@ -69,7 +69,7 @@
   version: 0.3.2
   date: '2026-04-25'
   path: plugins/anilist/anilist.zip
-  sha256: a3752bd6cc47730522623eb9a4b6b016f6dc89047b8ae6cdebba85afe479db27
+  sha256: 9fabfd11e50abef9d8a6e1023492fc24ae913b033d79989e75a659df7c48f85f
   runtime: typescript
   isNsfw: false
   description: Anime identification (TV, movies, OVAs) via the AniList GraphQL API
@@ -82,10 +82,10 @@
     supportsBatch: false
 - id: mangadex
   name: MangaDex
-  version: 0.1.2
+  version: 0.1.8
   date: '2026-05-11'
   path: plugins/mangadex/mangadex.zip
-  sha256: bbb44a162dd9fdb88fc17226f14b72290e5ab5af6ef839f2b5ce0a3d83d4e79c
+  sha256: b6ab60a53090618abe0eda019a00ab73aa7e8401c95e16c1b36331ad0fa9d375
   runtime: typescript
   isNsfw: false
   description: Manga and comic book identification via the MangaDex API
